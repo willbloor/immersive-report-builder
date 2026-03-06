@@ -86,6 +86,10 @@
             <div class="topbar-context-hint" id="topbarContextHint">Select a component for typography and surface controls.</div>
           </div>
           <div class="topbar-group topbar-group--global" aria-label="Global actions">
+            <button class="btn topbar-action-btn topbar-action-btn--danger" id="btnTopbarPurge" type="button" title="Purge all and reset to defaults" aria-label="Purge all and reset to defaults">
+              <span class="topbar-action-btn__icon" aria-hidden="true">🧹</span>
+              <span class="topbar-action-btn__label">Purge</span>
+            </button>
             <button class="btn topbar-action-btn topbar-action-btn--save" id="btnTopbarExport" type="button" title="Save project (JSON)" aria-label="Save project (JSON)">
               <span class="topbar-action-btn__icon" aria-hidden="true">💾</span>
               <span class="topbar-action-btn__label">Save</span>
@@ -106,11 +110,59 @@
         <aside class="panel palette no-print" aria-label="Workbench">
           <div class="workbench-shell">
             <nav class="workbench-rail" id="workbenchRail" aria-label="Workbench tools">
-              <button class="rail-btn" data-tool="pages" type="button" title="Pages">Pg</button>
-              <button class="rail-btn" data-tool="design" type="button" title="Design Elements">DE</button>
-              <button class="rail-btn" data-tool="components" type="button" title="Components">Cm</button>
-              <button class="rail-btn" data-tool="resources" type="button" title="Resources">Rs</button>
-              <button class="rail-btn" data-tool="styles" type="button" title="Styles">St</button>
+              <button class="rail-btn" data-tool="pages" type="button" title="Pages" aria-label="Pages">
+                <svg class="rail-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <rect x="5" y="4.5" width="14" height="15" rx="2"></rect>
+                  <line x1="8" y1="9" x2="16" y2="9"></line>
+                  <line x1="8" y1="12.5" x2="16" y2="12.5"></line>
+                  <line x1="8" y1="16" x2="13.5" y2="16"></line>
+                </svg>
+                <span class="sr-only">Pages</span>
+              </button>
+              <button class="rail-btn" data-tool="design" type="button" title="Design Elements" aria-label="Design Elements">
+                <svg class="rail-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M7.5 16.5l1.8-4.8L16 5l3 3-6.7 6.7-4.8 1.8z"></path>
+                  <path d="M14.2 6.8l3 3"></path>
+                  <line x1="5" y1="19" x2="10.5" y2="19"></line>
+                </svg>
+                <span class="sr-only">Design Elements</span>
+              </button>
+              <button class="rail-btn" data-tool="components" type="button" title="Components" aria-label="Components">
+                <svg class="rail-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <rect x="4.5" y="4.5" width="6.5" height="6.5" rx="1.2"></rect>
+                  <rect x="13" y="4.5" width="6.5" height="6.5" rx="1.2"></rect>
+                  <rect x="4.5" y="13" width="15" height="6.5" rx="1.2"></rect>
+                </svg>
+                <span class="sr-only">Components</span>
+              </button>
+              <button class="rail-btn" data-tool="charts" type="button" title="Charts" aria-label="Charts">
+                <svg class="rail-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <line x1="4.5" y1="19.5" x2="19.5" y2="19.5"></line>
+                  <rect x="6" y="12" width="2.8" height="6.5" rx="0.8"></rect>
+                  <rect x="10.6" y="9.5" width="2.8" height="9" rx="0.8"></rect>
+                  <rect x="15.2" y="6.5" width="2.8" height="12" rx="0.8"></rect>
+                  <polyline points="6.8,9.2 11.9,6.4 16.6,8.2"></polyline>
+                </svg>
+                <span class="sr-only">Charts</span>
+              </button>
+              <button class="rail-btn" data-tool="resources" type="button" title="Resources" aria-label="Resources">
+                <svg class="rail-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <ellipse cx="12" cy="6.2" rx="6.8" ry="2.7"></ellipse>
+                  <path d="M5.2 6.2v5.2c0 1.5 3 2.7 6.8 2.7s6.8-1.2 6.8-2.7V6.2"></path>
+                  <path d="M5.2 11.4v5.2c0 1.5 3 2.7 6.8 2.7s6.8-1.2 6.8-2.7v-5.2"></path>
+                </svg>
+                <span class="sr-only">Resources</span>
+              </button>
+              <button class="rail-btn" data-tool="styles" type="button" title="Styles" aria-label="Styles">
+                <svg class="rail-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M12 4.5a7.5 7.5 0 0 0 0 15h1.2a2.6 2.6 0 0 0 2.6-2.6c0-.8-.3-1.5-.8-2 .9-.3 1.8-.9 2.4-1.7A7.5 7.5 0 0 0 12 4.5z"></path>
+                  <circle cx="8.2" cy="9.2" r="1"></circle>
+                  <circle cx="11" cy="7.6" r="1"></circle>
+                  <circle cx="13.9" cy="8.1" r="1"></circle>
+                  <circle cx="8.9" cy="12.3" r="1"></circle>
+                </svg>
+                <span class="sr-only">Styles</span>
+              </button>
             </nav>
             <section class="workbench-drawer">
               <div class="panel-head">

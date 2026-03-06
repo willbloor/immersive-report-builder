@@ -1,7 +1,18 @@
 import { resolveDonutPercent } from "../render/value-sync.js";
 import { deepClone, getByPath, setByPath, toNumber } from "../utils/helpers.js";
+import {
+  buildChartRuntimeConfig,
+  inferColumnsFromRows,
+  normalizeChartBinding,
+  normalizeChartModel,
+} from "./chart-transform.js";
 
 const BINDING_PRESETS = {
+  chart: {
+    mode: "chart_roles_v1",
+    targetPath: "chart",
+    help: "Map chart roles and transforms to build chart series from a dataset.",
+  },
   kpi: {
     mode: "single",
     targetPath: "value",
@@ -43,7 +54,24 @@ export function bindingPresetForType(type) {
   return BINDING_PRESETS[type] || null;
 }
 
+function resolveUnifiedChartProps(component, datasets) {
+  const props = deepClone(component?.props || {});
+  props.chart = normalizeChartModel(props.chart || {}, "line_single");
+  props.chartRuntime = buildChartRuntimeConfig(
+    {
+      ...component,
+      props,
+    },
+    datasets,
+  );
+  return props;
+}
+
 export function resolveComponentProps(component, datasets) {
+  if (component?.type === "chart") {
+    return resolveUnifiedChartProps(component, datasets);
+  }
+
   const props = deepClone(component.props || {});
   const bindings = Array.isArray(component.dataBindings) ? component.dataBindings : [];
   if (bindings.length === 0) return props;
@@ -105,10 +133,46 @@ export function resolveComponentProps(component, datasets) {
 export function buildBinding(type, draft = {}) {
   const preset = bindingPresetForType(type);
   if (!preset) return null;
+  if (type === "chart") {
+    const variantId = draft.variantId || draft.chartVariant || draft.variant || "line_single";
+    const binding = normalizeChartBinding(
+      {
+        ...(draft || {}),
+        mode: "chart_roles_v1",
+      },
+      variantId,
+      draft.columns || [],
+    );
+    return binding;
+  }
   return {
     mode: draft.mode || preset.mode,
     targetPath: draft.targetPath || preset.targetPath,
     datasetId: draft.datasetId || "",
     mapping: draft.mapping || {},
   };
+}
+
+export function buildChartBindingDraft(component, datasets = [], nextDatasetId = null) {
+  const variantId = component?.props?.chart?.variant || "line_single";
+  const existing = Array.isArray(component?.dataBindings)
+    ? component.dataBindings.find((binding) => String(binding?.mode || "").startsWith("chart_roles"))
+    : null;
+  const datasetId = nextDatasetId == null
+    ? (existing?.datasetId || "")
+    : String(nextDatasetId || "");
+  const dataset = datasetId
+    ? (datasets || []).find((entry) => entry.id === datasetId)
+    : null;
+  const columns = Array.isArray(dataset?.columns) && dataset.columns.length > 0
+    ? dataset.columns
+    : inferColumnsFromRows(component?.props?.chart?.seedRows || []);
+  return normalizeChartBinding(
+    {
+      ...(existing || {}),
+      datasetId,
+    },
+    variantId,
+    columns,
+  );
 }

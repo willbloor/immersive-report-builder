@@ -1,4 +1,11 @@
 import { profileKeys } from "../print/profiles.js";
+import {
+  chartVariantById,
+  defaultChartBinding,
+  defaultChartModel,
+  LEGACY_CHART_VARIANT_BY_TYPE,
+} from "../data/chart-registry.js";
+import { migrateLegacyChartComponent } from "../data/chart-transform.js";
 import { clamp, deepClone, uid } from "../utils/helpers.js";
 import { normalizeTypographyProps } from "../utils/typography.js";
 
@@ -16,7 +23,7 @@ export const PAGE_KINDS = {
   custom: "custom",
 };
 
-export const BINDABLE_TYPES = new Set(["kpi", "gauge", "line", "bar", "waffle", "donut", "lollipop"]);
+export const BINDABLE_TYPES = new Set(["kpi", "chart", "gauge", "line", "bar", "waffle", "donut", "lollipop"]);
 export const GRID_COLS = 24;
 export const GRID_ROWS_MAX = 800;
 
@@ -212,8 +219,8 @@ function applyDefaultHeaderContract(component, page) {
   if (!component.layoutConstraints || typeof component.layoutConstraints !== "object") {
     component.layoutConstraints = {};
   }
-  component.layoutConstraints.locked = true;
-  component.layoutConstraints.allowedTypes = ["all_caps_title"];
+  component.layoutConstraints.locked = false;
+  component.layoutConstraints.allowedTypes = null;
   component.layoutConstraints.minColSpan = Math.max(7, Number(component.layoutConstraints.minColSpan) || 7);
   component.layoutConstraints.minRowSpan = Math.max(6, Number(component.layoutConstraints.minRowSpan) || 6);
   component.layoutConstraints.maxRowSpan = Math.max(component.layoutConstraints.minRowSpan, Number(component.layoutConstraints.maxRowSpan) || 18);
@@ -271,8 +278,8 @@ function makeDefaultAllCapsTitleComponent(page) {
     slotId: DEFAULT_PAGE_TITLE_SLOT_ID,
     props,
     layoutConstraints: {
-      locked: true,
-      allowedTypes: ["all_caps_title"],
+      locked: false,
+      allowedTypes: null,
       minColSpan: 7,
       maxColSpan: 24,
       minRowSpan: 6,
@@ -416,6 +423,7 @@ function makeCoverPage() {
         props: {
           org: "ORCHID BANK",
           period: "H1 2025",
+          contentOffsetY: 0,
           imageAssetId: null,
           imageUrl:
             "https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&w=1800&q=80",
@@ -930,6 +938,7 @@ function makeEndPage() {
         props: {
           org: "Executive Readiness Pack",
           period: "End of Report",
+          contentOffsetY: 0,
           imageAssetId: null,
           imageUrl:
             "https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&w=1800&q=80",
@@ -1038,20 +1047,21 @@ export const COMPONENT_LIBRARY = [
   { type: "header_3", label: "Header 3", description: "Medium-weight heading style.", category: "design" },
   { type: "copy_block", label: "Copy Block", description: "Muted paragraph copy style.", category: "design" },
   { type: "kpi", label: "KPI", description: "Large number with optional unit and delta.", category: "metrics" },
-  { type: "gauge", label: "Gauge", description: "Semi-arc gauge value.", category: "metrics" },
-  { type: "line", label: "Line Chart", description: "Time-series trend line.", category: "charts" },
-  { type: "bar", label: "Bar Chart", description: "Category bars for comparison.", category: "charts" },
-  { type: "waffle", label: "Waffle", description: "10x10 completion grid.", category: "charts" },
-  { type: "donut", label: "Donut", description: "Ring style ratio metric.", category: "charts" },
-  { type: "lollipop", label: "Lollipop", description: "Your vs benchmark marker chart.", category: "charts" },
   { type: "recommendation_card", label: "Recommendation Card", description: "Targeted recommendation content card.", category: "cards" },
   { type: "delta_card", label: "Delta Card", description: "Status card with delta percent.", category: "cards" },
 ];
+
+function migrateTemplatePageCharts(page) {
+  if (!page || !Array.isArray(page.components)) return page;
+  page.components = page.components.map((component) => migrateLegacyChartComponent(component));
+  return page;
+}
 
 export function createPageFromTemplate(templateId) {
   const template = TEMPLATE_LIBRARY.find((entry) => entry.id === templateId);
   if (!template) return null;
   const page = makePageEditable(template.make());
+  migrateTemplatePageCharts(page);
   page.pageKind = template.pageKind || defaultPageKind(page.templateId);
   return enforcePageContracts(page, { syncTitle: true });
 }
@@ -1098,11 +1108,58 @@ export function createInitialPages() {
     makeEndPage(),
   ].map((page) => {
     const editable = makePageEditable(page);
+    migrateTemplatePageCharts(editable);
     return enforcePageContracts(editable, { syncTitle: true });
   });
 }
 
-export function buildComponentFromType(type) {
+export function pageTemplateKey(page) {
+  if (!page || typeof page !== "object") return "";
+  const templateId = String(page.templateId || "").trim();
+  if (!templateId) return "";
+  const pageKind = String(page.pageKind || defaultPageKind(templateId) || PAGE_KINDS.content).trim();
+  return `${templateId}::${pageKind || PAGE_KINDS.content}`;
+}
+
+export function createMissingInitialPages(existingPages = []) {
+  const existingKeys = new Set(
+    (existingPages || [])
+      .map((page) => pageTemplateKey(page))
+      .filter(Boolean),
+  );
+  return createInitialPages().filter((page) => !existingKeys.has(pageTemplateKey(page)));
+}
+
+function buildUnifiedChartComponent(rawVariantId = "line_single") {
+  const variant = chartVariantById(rawVariantId);
+  return makeComponent({
+    type: "chart",
+    title: variant.label || "Chart",
+    body: "",
+    props: {
+      chart: defaultChartModel(variant.id),
+    },
+    dataBindings: [defaultChartBinding(variant.id)],
+    layouts: {
+      LETTER_landscape: { colStart: 1, colSpan: 6, rowStart: 1, rowSpan: 7 },
+      LETTER_portrait: { colStart: 1, colSpan: 12, rowStart: 1, rowSpan: 7 },
+      A4_landscape: { colStart: 1, colSpan: 6, rowStart: 1, rowSpan: 7 },
+      A4_portrait: { colStart: 1, colSpan: 12, rowStart: 1, rowSpan: 7 },
+    },
+  });
+}
+
+export function buildComponentFromType(type, options = {}) {
+  if (type === "chart") {
+    const variantId = String(options?.chartVariant || options?.variantId || options?.variant || "line_single").trim();
+    return buildUnifiedChartComponent(variantId || "line_single");
+  }
+
+  const legacyChartVariant = LEGACY_CHART_VARIANT_BY_TYPE[String(type || "").trim()];
+  if (legacyChartVariant) {
+    return buildUnifiedChartComponent(legacyChartVariant);
+  }
+
   if (type === "all_caps_title") {
     return makeComponent({
       type,
@@ -1122,8 +1179,8 @@ export function buildComponentFromType(type) {
         },
       },
       layoutConstraints: {
-        locked: true,
-        allowedTypes: ["all_caps_title"],
+        locked: false,
+        allowedTypes: null,
         minColSpan: 7,
         maxColSpan: 24,
         minRowSpan: 6,
@@ -1183,91 +1240,6 @@ export function buildComponentFromType(type) {
     });
   }
 
-  if (type === "gauge") {
-    return makeComponent({
-      type,
-      title: "Gauge",
-      body: "",
-      props: { value: 54, max: 100, unit: "/100" },
-      layouts: {
-        LETTER_landscape: { colStart: 1, colSpan: 4, rowStart: 1, rowSpan: 8 },
-        LETTER_portrait: { colStart: 1, colSpan: 12, rowStart: 1, rowSpan: 8 },
-        A4_landscape: { colStart: 1, colSpan: 4, rowStart: 1, rowSpan: 8 },
-        A4_portrait: { colStart: 1, colSpan: 12, rowStart: 1, rowSpan: 8 },
-      },
-    });
-  }
-
-  if (type === "line" || type === "bar") {
-    return makeComponent({
-      type,
-      title: type === "line" ? "Trend" : "Bars",
-      body: "",
-      props: {
-        points: [
-          { label: "Jan", value: 30 },
-          { label: "Feb", value: 42 },
-          { label: "Mar", value: 38 },
-          { label: "Apr", value: 50 },
-          { label: "May", value: 58 },
-          { label: "Jun", value: 62 },
-        ],
-        max: 100,
-      },
-      layouts: {
-        LETTER_landscape: { colStart: 1, colSpan: 6, rowStart: 1, rowSpan: 7 },
-        LETTER_portrait: { colStart: 1, colSpan: 12, rowStart: 1, rowSpan: 7 },
-        A4_landscape: { colStart: 1, colSpan: 6, rowStart: 1, rowSpan: 7 },
-        A4_portrait: { colStart: 1, colSpan: 12, rowStart: 1, rowSpan: 7 },
-      },
-    });
-  }
-
-  if (type === "waffle") {
-    return makeComponent({
-      type,
-      title: "Completion",
-      body: "",
-      props: { percent: 68, accent: "var(--status-high)", label: "Completion metric" },
-      layouts: {
-        LETTER_landscape: { colStart: 1, colSpan: 3, rowStart: 1, rowSpan: 8 },
-        LETTER_portrait: { colStart: 1, colSpan: 6, rowStart: 1, rowSpan: 8 },
-        A4_landscape: { colStart: 1, colSpan: 3, rowStart: 1, rowSpan: 8 },
-        A4_portrait: { colStart: 1, colSpan: 6, rowStart: 1, rowSpan: 8 },
-      },
-    });
-  }
-
-  if (type === "donut") {
-    return makeComponent({
-      type,
-      title: "Ratio",
-      body: "",
-      props: { percent: 18, value: 1.18, unit: "x", label: "vs benchmark" },
-      layouts: {
-        LETTER_landscape: { colStart: 1, colSpan: 3, rowStart: 1, rowSpan: 8 },
-        LETTER_portrait: { colStart: 1, colSpan: 6, rowStart: 1, rowSpan: 8 },
-        A4_landscape: { colStart: 1, colSpan: 3, rowStart: 1, rowSpan: 8 },
-        A4_portrait: { colStart: 1, colSpan: 6, rowStart: 1, rowSpan: 8 },
-      },
-    });
-  }
-
-  if (type === "lollipop") {
-    return makeComponent({
-      type,
-      title: "Comparison",
-      body: "",
-      props: { min: 1, max: 10, you: 6, benchmark: 7, leftLabel: "You", rightLabel: "Benchmark" },
-      layouts: {
-        LETTER_landscape: { colStart: 1, colSpan: 6, rowStart: 1, rowSpan: 6 },
-        LETTER_portrait: { colStart: 1, colSpan: 12, rowStart: 1, rowSpan: 6 },
-        A4_landscape: { colStart: 1, colSpan: 6, rowStart: 1, rowSpan: 6 },
-        A4_portrait: { colStart: 1, colSpan: 12, rowStart: 1, rowSpan: 6 },
-      },
-    });
-  }
-
   if (type === "cover_hero") {
     return makeComponent({
       type,
@@ -1276,6 +1248,7 @@ export function buildComponentFromType(type) {
       props: {
         org: "ORCHID BANK",
         period: "H1 2025",
+        contentOffsetY: 0,
         imageAssetId: null,
         imageUrl:
           "https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&w=1800&q=80",

@@ -8,6 +8,28 @@ import {
 } from "./schema.js";
 import { createInitialPages, defaultPageKind, enforcePageContracts, makeComponent } from "../templates/catalog.js";
 import { normalizeTypographyProps } from "../utils/typography.js";
+import {
+  inferColumnsFromRows,
+  migrateLegacyChartComponent,
+  normalizeChartBinding,
+  normalizeChartModel,
+} from "../data/chart-transform.js";
+
+function normalizeChartComponent(component) {
+  const migrated = migrateLegacyChartComponent(component);
+  const next = { ...migrated };
+  const nextProps = next.props && typeof next.props === "object" ? { ...next.props } : {};
+  const normalizedChart = normalizeChartModel(nextProps.chart || {}, "line_single");
+  nextProps.chart = normalizedChart;
+  next.props = normalizeTypographyProps(next.type, nextProps);
+
+  const candidateBinding = Array.isArray(next.dataBindings)
+    ? next.dataBindings.find((binding) => String(binding?.mode || "").startsWith("chart_roles"))
+    : null;
+  const columns = inferColumnsFromRows(normalizedChart.seedRows || []);
+  next.dataBindings = [normalizeChartBinding(candidateBinding || {}, normalizedChart.variant, columns)];
+  return next;
+}
 
 function normalizeTextTypography(pages) {
   return (pages || []).map((page) => {
@@ -16,9 +38,17 @@ function normalizeTextTypography(pages) {
     out.components = Array.isArray(page.components)
       ? page.components.map((component) => {
           if (!component || typeof component !== "object") return component;
-          const next = { ...component };
-          next.props = normalizeTypographyProps(next.type, next.props || {});
-          return next;
+          if (component.type === "chart") {
+            return normalizeChartComponent(component);
+          }
+          const next = migrateLegacyChartComponent(component);
+          if (next.type === "chart") {
+            return normalizeChartComponent(next);
+          }
+          return {
+            ...next,
+            props: normalizeTypographyProps(next.type, next.props || {}),
+          };
         })
       : [];
     return enforcePageContracts(out, { syncTitle: true });
@@ -82,7 +112,7 @@ function migrateV1ToV2(v1State) {
     components: (page.blocks || []).map(legacyBlockToComponent),
   }));
   if (base.pages.length === 0) {
-    base.pages = createInitialPages();
+    base.pages = normalizeTextTypography(createInitialPages());
   }
   base.ui.selectedPageId = v1State.selected?.pageId || null;
   base.ui.selectedComponentId = v1State.selected?.blockId || null;
@@ -120,7 +150,7 @@ function normalizeV2(candidate) {
   };
   ensureUiState(merged);
   if (merged.pages.length === 0) {
-    merged.pages = createInitialPages();
+    merged.pages = normalizeTextTypography(createInitialPages());
   }
   merged.schemaVersion = "0.2";
   touchUpdatedAt(merged);
@@ -130,7 +160,7 @@ function normalizeV2(candidate) {
 export function migrateAnyProject(raw) {
   if (!raw || typeof raw !== "object") {
     const state = makeEmptyState();
-    state.pages = createInitialPages();
+    state.pages = normalizeTextTypography(createInitialPages());
     return state;
   }
 
@@ -143,6 +173,6 @@ export function migrateAnyProject(raw) {
   }
 
   const fallback = makeEmptyState();
-  fallback.pages = createInitialPages();
+  fallback.pages = normalizeTextTypography(createInitialPages());
   return fallback;
 }

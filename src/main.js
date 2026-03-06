@@ -1,5 +1,11 @@
 import { importAssetFile } from "./assets/asset-manager.js";
-import { bindingPresetForType, buildBinding } from "./data/bindings.js";
+import { bindingPresetForType, buildBinding, buildChartBindingDraft } from "./data/bindings.js";
+import {
+  CHART_FAMILY_OPTIONS,
+  chartVariantById,
+  chartVariantCardHtml,
+  chartVariantsForFamily,
+} from "./data/chart-registry.js";
 import {
   arrayControlSpecFor,
   createArrayItemForPath,
@@ -15,6 +21,7 @@ import { PRINT_PROFILES } from "./print/profiles.js";
 import { mountRuntimeCharts } from "./render/chart-runtime.js";
 import { renderPageNode, collectOverflowWarnings, setDragData, DND_MIME } from "./render/page.js";
 import { createStore, loadPersistedState } from "./state/store.js";
+import { makeEmptyState, STORAGE_KEY_V1, STORAGE_KEY_V2 } from "./state/schema.js";
 import {
   BINDABLE_TYPES,
   COMPONENT_LIBRARY,
@@ -23,6 +30,7 @@ import {
   TEMPLATE_LIBRARY,
   buildComponentFromType,
   clonePage,
+  createMissingInitialPages,
   createInitialPages,
   createPageFromTemplate,
   enforcePageContracts,
@@ -92,6 +100,7 @@ const refs = {
   btnRedo: document.getElementById("btnRedo"),
   btnPrint: document.getElementById("btnPrint"),
   btnTopbarExport: document.getElementById("btnTopbarExport"),
+  btnTopbarPurge: document.getElementById("btnTopbarPurge"),
   btnTopbarAutoFit: document.getElementById("btnTopbarAutoFit"),
   btnGrid: document.getElementById("btnToggleGrid"),
   textTopbarControls: document.getElementById("textTopbarControls"),
@@ -157,6 +166,9 @@ const AUTO_FIT_SETTLE_DEFAULTS = {
   timeoutMs: 900,
   fontsTimeoutMs: 450,
 };
+const PAGE_REORDER_SHIFT_MS = 170;
+const PAGE_REORDER_AUTO_SCROLL_EDGE_PX = 52;
+const PAGE_REORDER_AUTO_SCROLL_MAX_PX = 14;
 
 initPerf({
   app: "doc-builder",
@@ -171,9 +183,18 @@ const moveableRuntime = {
   active: null,
   warnedMissing: false,
 };
+const inspectorSectionRuntime = {
+  settings: {
+    basic: true,
+    controls: null,
+    layout: false,
+    advanced: false,
+  },
+};
 let topbarTypographySession = null;
 let topbarSurfaceSession = null;
 let inspectorTextSession = null;
+let componentClipboard = null;
 let fitZoomFrameId = null;
 let fitZoomTimeoutId = null;
 let reflowSuspendCount = 0;
@@ -186,6 +207,24 @@ const autoFitRuntime = {
   startedAt: 0,
   lastResult: null,
 };
+const pageReorderRuntime = {
+  isActive: false,
+  draggingPageId: null,
+  sourceIndex: -1,
+  targetIndex: -1,
+  sourceRowEl: null,
+  placeholderEl: null,
+  listEl: null,
+  scrollContainerEl: null,
+  floatingEl: null,
+  pointerClientY: 0,
+  autoScrollFrame: null,
+  pointerId: null,
+  pointerOffsetY: 0,
+  pointerOffsetX: 0,
+  onPointerMove: null,
+  onPointerUp: null,
+};
 const reflowDebounce = debounce(() => {
   if (pendingAutoReflowReason) {
     requestAutoFit({ trigger: "debounced", reason: pendingAutoReflowReason });
@@ -194,6 +233,21 @@ const reflowDebounce = debounce(() => {
 }, 260);
 
 const TARGET_GRID_DENSITY = 2;
+
+function readInspectorSettingsSectionOpen(section, fallback = false) {
+  const value = inspectorSectionRuntime.settings?.[section];
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function bindInspectorSettingsSectionToggles(root) {
+  root.querySelectorAll("details[data-inspector-section]").forEach((detailsEl) => {
+    detailsEl.addEventListener("toggle", () => {
+      const key = detailsEl.dataset.inspectorSection;
+      if (!key) return;
+      inspectorSectionRuntime.settings[key] = detailsEl.open;
+    });
+  });
+}
 
 function scaleLayoutToDensity(layout, factor) {
   if (!layout || typeof layout !== "object") return;
@@ -250,6 +304,167 @@ function ensureTargetGridDensity(draft, options = {}) {
   }
   draft.project.gridDensity = TARGET_GRID_DENSITY;
   return true;
+}
+
+function normalizeUiSelectionInDraft(draft) {
+  if (!Array.isArray(draft.pages) || draft.pages.length === 0) {
+    draft.ui.selectedPageId = null;
+    draft.ui.selectedComponentId = null;
+    draft.ui.activePageId = null;
+    draft.ui.pageSettingsPageId = null;
+    return;
+  }
+  const selectedPage = findPage(draft, draft.ui.selectedPageId)
+    || findPage(draft, draft.ui.activePageId)
+    || draft.pages[0];
+  draft.ui.selectedPageId = selectedPage?.id || null;
+  draft.ui.activePageId = selectedPage?.id || null;
+  if (!findComponent(selectedPage, draft.ui.selectedComponentId)) {
+    draft.ui.selectedComponentId = null;
+  }
+  if (!findPage(draft, draft.ui.pageSettingsPageId)) {
+    draft.ui.pageSettingsPageId = null;
+  }
+}
+
+function parsePaletteOverrideInput(value) {
+  if (Array.isArray(value)) {
+    return value.map((entry) => String(entry || "").trim()).filter(Boolean);
+  }
+  return String(value || "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function chartStyleNeedsReset(chartModel = {}) {
+  const visual = chartModel.visual && typeof chartModel.visual === "object" ? chartModel.visual : {};
+  const overrides = chartModel.overrides && typeof chartModel.overrides === "object" ? chartModel.overrides : {};
+  const hasPaletteOverride = parsePaletteOverrideInput(visual.paletteOverride).length > 0
+    || parsePaletteOverrideInput(visual.palette).length > 0;
+  return visual.useBrandDefaults === false || hasPaletteOverride || Object.keys(overrides).length > 0;
+}
+
+function resetChartStyleModel(chartModel = {}) {
+  const visual = chartModel.visual && typeof chartModel.visual === "object" ? chartModel.visual : {};
+  return {
+    ...chartModel,
+    visual: {
+      ...visual,
+      useBrandDefaults: true,
+      palette: "",
+      paletteOverride: [],
+    },
+    overrides: {},
+  };
+}
+
+function resetAllChartStylesToBrandDefaults() {
+  const state = store.getState();
+  let updated = 0;
+  for (const page of state.pages || []) {
+    for (const component of page.components || []) {
+      if (component.type !== "chart") continue;
+      if (chartStyleNeedsReset(component.props?.chart || {})) {
+        updated += 1;
+      }
+    }
+  }
+  if (updated === 0) {
+    showToast("All charts already use brand defaults");
+    return;
+  }
+
+  store.commit((draft) => {
+    for (const page of draft.pages || []) {
+      for (const component of page.components || []) {
+        if (component.type !== "chart") continue;
+        const chartModel = component.props?.chart || {};
+        if (!chartStyleNeedsReset(chartModel)) continue;
+        component.props = {
+          ...(component.props || {}),
+          chart: resetChartStyleModel(chartModel),
+        };
+      }
+    }
+  }, { historyLabel: "reset-chart-styles" });
+  showToast(`Reset ${updated} chart style${updated === 1 ? "" : "s"} to brand defaults`);
+  requestAutoFit({ trigger: "debounced", reason: "chart-style-reset-all" });
+}
+
+function addMissingDefaultPages() {
+  const state = store.getState();
+  const missing = createMissingInitialPages(state.pages || []);
+  if (missing.length === 0) {
+    showToast("All default pages are already present");
+    return;
+  }
+
+  store.commit((draft) => {
+    const density = Math.max(1, Number(draft.project?.gridDensity) || 1);
+    for (const page of missing) {
+      if (density > 1) {
+        scalePageToDensity(page, density);
+      }
+      draft.pages.push(page);
+    }
+    normalizeUiSelectionInDraft(draft);
+  }, { historyLabel: "add-default-pages" });
+
+  showToast(`Added ${missing.length} missing default page${missing.length === 1 ? "" : "s"}`);
+  requestAutoFit({ trigger: "debounced", reason: "add-default-pages" });
+}
+
+async function resetSamplePack() {
+  const proceed = await requestDecision({
+    title: "Reset sample pack",
+    message: "Reset to the sample template pack? This replaces current pages and clears imported datasets/assets.",
+    confirmLabel: "Reset",
+    cancelLabel: "Keep current",
+    tone: "danger",
+  });
+  if (!proceed) return;
+  store.commit((draft) => {
+    draft.pages = createInitialPages();
+    ensureTargetGridDensity(draft, { force: true });
+    draft.datasets = [];
+    draft.assets = [];
+    normalizeUiSelectionInDraft(draft);
+  }, { historyLabel: "reset" });
+  showToast("Sample pages restored");
+  requestAutoFit({ trigger: "reset", reason: "reset" });
+}
+
+function clearPersistedProjectState() {
+  try {
+    localStorage.removeItem(STORAGE_KEY_V2);
+    localStorage.removeItem(STORAGE_KEY_V1);
+  } catch (_error) {
+    // Ignore storage errors in local-only mode.
+  }
+}
+
+async function purgeAllAndResetDefaults() {
+  const proceed = await requestDecision({
+    title: "Purge everything?",
+    message: "This will reset to factory defaults: default templates only, no imported data/assets, and no custom styling or history.",
+    confirmLabel: "Purge all",
+    cancelLabel: "Cancel",
+    tone: "danger",
+  });
+  if (!proceed) return;
+
+  const baseline = makeEmptyState();
+  baseline.pages = createInitialPages();
+  ensureTargetGridDensity(baseline, { force: true });
+  normalizeUiSelectionInDraft(baseline);
+
+  clearPersistedProjectState();
+  store.replace(baseline, { skipHistory: true });
+  store.clearHistory();
+
+  showToast("Factory defaults restored");
+  requestAutoFit({ trigger: "reset", reason: "purge-all" });
 }
 
 if (store.getState().pages.length === 0) {
@@ -398,8 +613,8 @@ function unlockPageModel(page) {
   for (const component of page.components || []) {
     if (!component.layoutConstraints) component.layoutConstraints = {};
     if (isDefaultPageHeaderComponent(component)) {
-      component.layoutConstraints.locked = true;
-      component.layoutConstraints.allowedTypes = ["all_caps_title"];
+      component.layoutConstraints.locked = false;
+      component.layoutConstraints.allowedTypes = null;
       component.slotId = "default-page-title";
       component.isDefaultPageTitle = true;
       continue;
@@ -417,6 +632,10 @@ function findPage(draft, pageId) {
 function findComponent(page, componentId) {
   if (!page) return null;
   return page.components.find((component) => component.id === componentId) || null;
+}
+
+function makeComponentId() {
+  return `cmp_${Math.random().toString(16).slice(2)}_${Date.now().toString(16)}`;
 }
 
 function selectedEntities(state = store.getState()) {
@@ -596,6 +815,29 @@ function openComponentEditor(pageId, componentId, tab = "settings") {
     draft.ui.inspectorTab = nextTab;
     draft.ui.inspectorOpen = true;
     draft.ui.pendingDeleteComponentId = null;
+  }, { skipHistory: true });
+}
+
+function toggleComponentEditor(pageId, componentId, tab = "settings") {
+  clearTextEditSessions();
+  const nextTab = tab === "data" ? "data" : "settings";
+  const state = store.getState();
+  const isSameSelection =
+    state.ui.selectedPageId === pageId &&
+    state.ui.selectedComponentId === componentId;
+  const shouldClose = isSameSelection && Boolean(state.ui.inspectorOpen);
+
+  store.commit((draft) => {
+    draft.ui.selectedPageId = pageId;
+    draft.ui.selectedComponentId = componentId;
+    draft.ui.activePageId = pageId;
+    draft.ui.pendingDeleteComponentId = null;
+    if (shouldClose) {
+      draft.ui.inspectorOpen = false;
+      return;
+    }
+    draft.ui.inspectorTab = nextTab;
+    draft.ui.inspectorOpen = true;
   }, { skipHistory: true });
 }
 
@@ -849,6 +1091,115 @@ function fmtTopbarNumber(value, digits = 2) {
     .replace(/\.?0+$/, "");
 }
 
+function normalizeHexColor(value, fallback = "#17181C") {
+  const raw = String(value || "").trim();
+  if (/^#[0-9a-f]{3}$/i.test(raw)) {
+    return `#${raw
+      .slice(1)
+      .split("")
+      .map((char) => `${char}${char}`)
+      .join("")
+      .toUpperCase()}`;
+  }
+  if (/^#[0-9a-f]{6}$/i.test(raw)) {
+    return raw.toUpperCase();
+  }
+  return fallback;
+}
+
+function cssColorToInputColor(value, fallback = "#17181C", options = {}) {
+  const allowTransparent = options.allowTransparent === true;
+  const raw = String(value || "").trim();
+  if (!raw) return fallback;
+  if (raw.toLowerCase() === "transparent") {
+    return allowTransparent ? "transparent" : fallback;
+  }
+  if (/^#[0-9a-f]{3,6}$/i.test(raw)) {
+    return normalizeHexColor(raw, fallback);
+  }
+
+  const match = raw.match(/^rgba?\(([^)]+)\)$/i);
+  if (!match) return fallback;
+  const parts = match[1].split(",").map((part) => part.trim());
+  if (parts.length < 3) return fallback;
+
+  const parseChannel = (part) => {
+    if (part.endsWith("%")) {
+      const ratio = Number.parseFloat(part.slice(0, -1));
+      if (!Number.isFinite(ratio)) return NaN;
+      return Math.round((Math.max(0, Math.min(100, ratio)) / 100) * 255);
+    }
+    const valueNum = Number.parseFloat(part);
+    if (!Number.isFinite(valueNum)) return NaN;
+    return Math.round(Math.max(0, Math.min(255, valueNum)));
+  };
+
+  const parseAlpha = (part) => {
+    if (part == null) return 1;
+    const valueNum = Number.parseFloat(part);
+    if (!Number.isFinite(valueNum)) return 1;
+    return Math.max(0, Math.min(1, valueNum));
+  };
+
+  const r = parseChannel(parts[0]);
+  const g = parseChannel(parts[1]);
+  const b = parseChannel(parts[2]);
+  const a = parseAlpha(parts[3]);
+  if (!Number.isFinite(r) || !Number.isFinite(g) || !Number.isFinite(b)) return fallback;
+  if (a <= 0.01) {
+    return allowTransparent ? "transparent" : fallback;
+  }
+  const byte = (valueNum) => valueNum.toString(16).padStart(2, "0").toUpperCase();
+  return `#${byte(r)}${byte(g)}${byte(b)}`;
+}
+
+function hasExplicitSurfaceOverrides(component) {
+  const surface = component?.props?.surface;
+  if (!surface || typeof surface !== "object") return false;
+  return ["backgroundColor", "keyline", "keylineColor"].some((key) => {
+    const value = surface[key];
+    return value != null && String(value).trim() !== "";
+  });
+}
+
+function readRenderedSurfaceStyle(pageId, componentId, fallbackSurface) {
+  if (!refs.pages || !pageId || !componentId) return null;
+  const node = refs.pages.querySelector(`[data-page-id="${pageId}"] [data-component-id="${componentId}"]`);
+  if (!(node instanceof HTMLElement)) return null;
+  const content = node.querySelector(REFLOW_CONTENT_SELECTOR) || node;
+  if (!(content instanceof HTMLElement)) return null;
+  const computed = getComputedStyle(content);
+
+  const backgroundColor = cssColorToInputColor(
+    computed.backgroundColor,
+    fallbackSurface.backgroundColor === "transparent" ? "#ECEEF5" : fallbackSurface.backgroundColor,
+    { allowTransparent: true },
+  );
+  const borderColorRaw = cssColorToInputColor(computed.borderTopColor, fallbackSurface.keylineColor, { allowTransparent: true });
+  const borderColor = borderColorRaw === "transparent" ? fallbackSurface.keylineColor : borderColorRaw;
+  const borderWidth = toNumber(computed.borderTopWidth, 0);
+  const keyline = borderWidth <= 0.5 || borderColorRaw === "transparent"
+    ? "none"
+    : borderWidth >= 2
+      ? "thick"
+      : "thin";
+
+  return {
+    backgroundColor,
+    keyline,
+    keylineColor: borderColor,
+  };
+}
+
+function resolveSurfaceStyleForSelection(page, component) {
+  const normalized = readSurfaceStyle(component);
+  if (hasExplicitSurfaceOverrides(component)) {
+    return normalized;
+  }
+  const rendered = readRenderedSurfaceStyle(page?.id, component?.id, normalized);
+  return rendered || normalized;
+}
+
 function normalizeStylePropsForType(type, props) {
   const source = props && typeof props === "object" ? { ...props } : {};
   const styleSeed = normalizeTypographySurfaceProps(type || "text", {
@@ -971,7 +1322,7 @@ function previewSelectedTextSurface(stylePatch) {
     topbarSurfaceSession = {
       pageId: page.id,
       componentId: component.id,
-      baseline: { ...readSurfaceStyle(component) },
+      baseline: { ...resolveSurfaceStyleForSelection(page, component) },
     };
   }
 
@@ -985,7 +1336,7 @@ function commitSelectedTextSurface(stylePatch, historyLabel = "topbar-surface") 
   const { page, component } = selectedStyleEntities(state);
   if (!page || !component) return;
   const finalStyle = {
-    ...readSurfaceStyle(component),
+    ...resolveSurfaceStyleForSelection(page, component),
     ...(stylePatch || {}),
   };
 
@@ -1088,20 +1439,22 @@ function syncTopbarTextControls(state) {
     refs.btnTopbarCaseNormal?.classList.toggle("is-active", style.textTransform !== "uppercase");
     refs.btnTopbarCaseUpper?.classList.toggle("is-active", style.textTransform === "uppercase");
     if (refs.topbarTextTransform) refs.topbarTextTransform.value = style.textTransform;
-    if (refs.topbarTextColor) refs.topbarTextColor.value = style.color;
+    if (refs.topbarTextColor) refs.topbarTextColor.value = cssColorToInputColor(style.color, "#17181C");
     return;
   }
 
-  const surface = readSurfaceStyle(component);
+  const surface = resolveSurfaceStyleForSelection(page, component);
   const hasTransparentFill = isTransparentSurfaceColor(surface.backgroundColor);
   if (refs.topbarKeyline) {
     const keylineValue = surface.keyline === "none" || surface.keyline === "thick" ? surface.keyline : "thin";
     refs.topbarKeyline.value = keylineValue;
   }
-  if (refs.topbarKeylineColor) refs.topbarKeylineColor.value = surface.keylineColor;
+  if (refs.topbarKeylineColor) refs.topbarKeylineColor.value = cssColorToInputColor(surface.keylineColor, "#D7D7E7");
   refs.btnTopbarBackgroundNone?.classList.toggle("is-active", hasTransparentFill);
   if (refs.topbarBackgroundColor) {
-    refs.topbarBackgroundColor.value = hasTransparentFill ? "#ECEEF5" : surface.backgroundColor;
+    refs.topbarBackgroundColor.value = hasTransparentFill
+      ? "#ECEEF5"
+      : cssColorToInputColor(surface.backgroundColor, "#ECEEF5");
     refs.topbarBackgroundColor.disabled = false;
   }
 }
@@ -1128,6 +1481,8 @@ function addPageFromTemplate(templateId) {
     draft.ui.selectedPageId = page.id;
     draft.ui.selectedComponentId = null;
     draft.ui.activePageId = page.id;
+    draft.ui.pagePanelTab = "pages";
+    draft.ui.pageSettingsPageId = null;
   }, { historyLabel: "add-page" });
   showToast("Template page added");
   requestAutoFit({ trigger: "debounced", reason: "template-add" });
@@ -1145,6 +1500,8 @@ function addCustomPage() {
     draft.ui.selectedPageId = page.id;
     draft.ui.selectedComponentId = null;
     draft.ui.activePageId = page.id;
+    draft.ui.pagePanelTab = "pages";
+    draft.ui.pageSettingsPageId = null;
   }, { historyLabel: "add-custom-page" });
   showToast("Custom page added");
   requestAutoFit({ trigger: "debounced", reason: "custom-page-add" });
@@ -1160,6 +1517,8 @@ function duplicatePage(pageId) {
     draft.ui.selectedPageId = copy.id;
     draft.ui.selectedComponentId = null;
     draft.ui.activePageId = copy.id;
+    draft.ui.pagePanelTab = "pages";
+    draft.ui.pageSettingsPageId = null;
   }, { historyLabel: "duplicate-page" });
   showToast("Page duplicated as editable copy");
 }
@@ -1179,6 +1538,9 @@ function deletePage(pageId) {
     draft.ui.selectedPageId = next?.id || null;
     draft.ui.selectedComponentId = null;
     draft.ui.activePageId = next?.id || null;
+    if (draft.ui.pageSettingsPageId === pageId) {
+      draft.ui.pageSettingsPageId = null;
+    }
   }, { historyLabel: "delete-page" });
   showToast("Page removed");
 }
@@ -1196,18 +1558,362 @@ function unlockPage(pageId, historyLabel = "unlock-page") {
   return true;
 }
 
-function movePage(pageId, direction) {
+function pageLabel(page) {
+  return String(page?.title || page?.templateId || "Untitled Page").trim() || "Untitled Page";
+}
+
+function announcePageReorder(message) {
+  const live = document.getElementById("pageReorderLive");
+  if (!(live instanceof HTMLElement)) return;
+  live.textContent = "";
+  requestAnimationFrame(() => {
+    live.textContent = message;
+  });
+}
+
+function focusPageDragHandle(pageId) {
+  if (!pageId) return;
+  requestAnimationFrame(() => {
+    const selector = `[data-page-drag-handle][data-page-id="${pageId}"]`;
+    const target = refs.palette?.querySelector(selector);
+    if (target instanceof HTMLElement) {
+      target.focus();
+    }
+  });
+}
+
+function reorderPageToIndex(pageId, targetIndex, options = {}) {
+  const { historyLabel = "reorder-page", announce = true } = options;
+  const state = store.getState();
+  const sourceIndex = state.pages.findIndex((page) => page.id === pageId);
+  if (sourceIndex < 0) return false;
+  const boundedTarget = Math.max(0, Math.min(Number(targetIndex) || 0, state.pages.length - 1));
+  if (boundedTarget === sourceIndex) return false;
+
+  let moved = false;
   store.commit((draft) => {
     const index = draft.pages.findIndex((page) => page.id === pageId);
     if (index < 0) return;
-    const nextIndex = index + direction;
-    if (nextIndex < 0 || nextIndex >= draft.pages.length) return;
+    const nextIndex = Math.max(0, Math.min(Number(targetIndex) || 0, draft.pages.length - 1));
+    if (nextIndex === index) return;
     const [page] = draft.pages.splice(index, 1);
     draft.pages.splice(nextIndex, 0, page);
-  }, { historyLabel: "move-page" });
+    moved = true;
+  }, { historyLabel });
+
+  if (moved && announce) {
+    const next = store.getState();
+    const index = next.pages.findIndex((page) => page.id === pageId);
+    const page = next.pages[index];
+    announcePageReorder(`Moved ${pageLabel(page)} to position ${index + 1} of ${next.pages.length}.`);
+  }
+  return moved;
 }
 
-function addComponent(pageId, type, position) {
+function movePage(pageId, direction, options = {}) {
+  const state = store.getState();
+  const index = state.pages.findIndex((page) => page.id === pageId);
+  if (index < 0) return false;
+  const nextIndex = index + direction;
+  if (nextIndex < 0 || nextIndex >= state.pages.length) return false;
+  return reorderPageToIndex(pageId, nextIndex, { historyLabel: "move-page", announce: options.announce !== false });
+}
+
+function clearPageReorderFloating() {
+  if (pageReorderRuntime.floatingEl) {
+    pageReorderRuntime.floatingEl.remove();
+    pageReorderRuntime.floatingEl = null;
+  }
+}
+
+function stopPageReorderAutoScroll() {
+  if (pageReorderRuntime.autoScrollFrame != null) {
+    cancelAnimationFrame(pageReorderRuntime.autoScrollFrame);
+    pageReorderRuntime.autoScrollFrame = null;
+  }
+}
+
+function resetPageReorderRuntime(options = {}) {
+  const restoreSource = options.restoreSource !== false;
+  stopPageReorderAutoScroll();
+  clearPageReorderFloating();
+  if (pageReorderRuntime.onPointerMove) {
+    window.removeEventListener("pointermove", pageReorderRuntime.onPointerMove, true);
+  }
+  if (pageReorderRuntime.onPointerUp) {
+    window.removeEventListener("pointerup", pageReorderRuntime.onPointerUp, true);
+    window.removeEventListener("pointercancel", pageReorderRuntime.onPointerUp, true);
+  }
+  if (pageReorderRuntime.placeholderEl) {
+    pageReorderRuntime.placeholderEl.remove();
+  }
+  if (restoreSource && pageReorderRuntime.sourceRowEl) {
+    pageReorderRuntime.sourceRowEl.style.removeProperty("display");
+    pageReorderRuntime.sourceRowEl.style.removeProperty("visibility");
+    pageReorderRuntime.sourceRowEl.classList.remove("is-drag-source");
+  }
+  pageReorderRuntime.isActive = false;
+  pageReorderRuntime.draggingPageId = null;
+  pageReorderRuntime.sourceIndex = -1;
+  pageReorderRuntime.targetIndex = -1;
+  pageReorderRuntime.sourceRowEl = null;
+  pageReorderRuntime.placeholderEl = null;
+  pageReorderRuntime.listEl = null;
+  pageReorderRuntime.scrollContainerEl = null;
+  pageReorderRuntime.pointerClientY = 0;
+  pageReorderRuntime.pointerId = null;
+  pageReorderRuntime.pointerOffsetY = 0;
+  pageReorderRuntime.pointerOffsetX = 0;
+  pageReorderRuntime.onPointerMove = null;
+  pageReorderRuntime.onPointerUp = null;
+}
+
+function pageRowsForReorder(listEl) {
+  if (!(listEl instanceof HTMLElement)) return [];
+  return [...listEl.querySelectorAll("[data-page-row]")].filter((row) => row instanceof HTMLElement);
+}
+
+function pageRowsWithoutSource(listEl, sourceRowEl) {
+  return pageRowsForReorder(listEl).filter((row) => row !== sourceRowEl && row.style.display !== "none");
+}
+
+function createPageFloatingRow(row, startRect, pointerX, pointerY) {
+  const floating = row.cloneNode(true);
+  floating.classList.add("drawer-list-row--floating", "no-print");
+  floating.removeAttribute("data-page-row");
+  floating.style.width = `${Math.round(startRect.width)}px`;
+  floating.style.left = `${Math.round(startRect.left)}px`;
+  floating.style.top = `${Math.round(startRect.top)}px`;
+  document.body.appendChild(floating);
+  pageReorderRuntime.pointerOffsetX = pointerX - startRect.left;
+  pageReorderRuntime.pointerOffsetY = pointerY - startRect.top;
+  return floating;
+}
+
+function moveFloatingRow(pointerX, pointerY) {
+  const floating = pageReorderRuntime.floatingEl;
+  if (!(floating instanceof HTMLElement)) return;
+  const left = pointerX - pageReorderRuntime.pointerOffsetX;
+  const top = pointerY - pageReorderRuntime.pointerOffsetY;
+  floating.style.left = `${Math.round(left)}px`;
+  floating.style.top = `${Math.round(top)}px`;
+}
+
+function createPagePlaceholder(heightPx) {
+  const placeholder = document.createElement("div");
+  placeholder.className = "drawer-list-placeholder";
+  placeholder.innerHTML = '<span>Drop page here</span>';
+  placeholder.style.height = `${Math.max(40, Math.round(heightPx || 52))}px`;
+  return placeholder;
+}
+
+function animatePageRowsFlip(listEl, mutate, excluded = new Set()) {
+  const beforeRows = pageRowsForReorder(listEl).filter(
+    (row) => !excluded.has(row) && row.style.display !== "none",
+  );
+  const before = new Map(beforeRows.map((row) => [row, row.getBoundingClientRect().top]));
+  mutate();
+  const afterRows = pageRowsForReorder(listEl).filter(
+    (row) => !excluded.has(row) && row.style.display !== "none",
+  );
+  afterRows.forEach((row) => {
+    const prevTop = before.get(row);
+    if (!Number.isFinite(prevTop)) return;
+    const nextTop = row.getBoundingClientRect().top;
+    const delta = prevTop - nextTop;
+    if (Math.abs(delta) < 0.5) return;
+    row.classList.add("is-shifting");
+    row.style.transition = "none";
+    row.style.transform = `translateY(${delta}px)`;
+    row.getBoundingClientRect();
+    row.style.transition = `transform ${PAGE_REORDER_SHIFT_MS}ms ease`;
+    row.style.transform = "translateY(0)";
+    window.setTimeout(() => {
+      row.style.removeProperty("transition");
+      row.style.removeProperty("transform");
+      row.classList.remove("is-shifting");
+    }, PAGE_REORDER_SHIFT_MS + 24);
+  });
+}
+
+function movePlaceholderToIndex(listEl, sourceRowEl, placeholderEl, index) {
+  if (!(listEl instanceof HTMLElement) || !(placeholderEl instanceof HTMLElement)) return -1;
+  const rows = pageRowsWithoutSource(listEl, sourceRowEl);
+  const bounded = Math.max(0, Math.min(index, rows.length));
+  const move = () => {
+    if (bounded >= rows.length) {
+      listEl.appendChild(placeholderEl);
+      return;
+    }
+    listEl.insertBefore(placeholderEl, rows[bounded]);
+  };
+  if (placeholderEl.parentElement === listEl) {
+    animatePageRowsFlip(listEl, move, new Set([sourceRowEl]));
+  } else {
+    move();
+  }
+  return bounded;
+}
+
+function calculateDropIndex(listEl, sourceRowEl, clientY) {
+  const rows = pageRowsWithoutSource(listEl, sourceRowEl);
+  if (!rows.length) return 0;
+  for (let i = 0; i < rows.length; i += 1) {
+    const rect = rows[i].getBoundingClientRect();
+    const midpoint = rect.top + rect.height / 2;
+    if (clientY < midpoint) return i;
+  }
+  return rows.length;
+}
+
+function updatePageReorderFromPointer(clientY) {
+  if (!pageReorderRuntime.isActive || !(pageReorderRuntime.listEl instanceof HTMLElement)) return;
+  pageReorderRuntime.pointerClientY = clientY;
+  const index = calculateDropIndex(
+    pageReorderRuntime.listEl,
+    pageReorderRuntime.sourceRowEl,
+    clientY,
+  );
+  if (index === pageReorderRuntime.targetIndex) return;
+  pageReorderRuntime.targetIndex = movePlaceholderToIndex(
+    pageReorderRuntime.listEl,
+    pageReorderRuntime.sourceRowEl,
+    pageReorderRuntime.placeholderEl,
+    index,
+  );
+}
+
+function runPageReorderAutoScroll() {
+  if (!pageReorderRuntime.isActive || !(pageReorderRuntime.scrollContainerEl instanceof HTMLElement)) {
+    stopPageReorderAutoScroll();
+    return;
+  }
+  const container = pageReorderRuntime.scrollContainerEl;
+  const rect = container.getBoundingClientRect();
+  let velocity = 0;
+  const fromTop = pageReorderRuntime.pointerClientY - rect.top;
+  const fromBottom = rect.bottom - pageReorderRuntime.pointerClientY;
+
+  if (fromTop < PAGE_REORDER_AUTO_SCROLL_EDGE_PX) {
+    const ratio = Math.max(0, Math.min(1, (PAGE_REORDER_AUTO_SCROLL_EDGE_PX - fromTop) / PAGE_REORDER_AUTO_SCROLL_EDGE_PX));
+    velocity = -Math.ceil(PAGE_REORDER_AUTO_SCROLL_MAX_PX * ratio);
+  } else if (fromBottom < PAGE_REORDER_AUTO_SCROLL_EDGE_PX) {
+    const ratio = Math.max(0, Math.min(1, (PAGE_REORDER_AUTO_SCROLL_EDGE_PX - fromBottom) / PAGE_REORDER_AUTO_SCROLL_EDGE_PX));
+    velocity = Math.ceil(PAGE_REORDER_AUTO_SCROLL_MAX_PX * ratio);
+  }
+
+  if (velocity !== 0) {
+    const previous = container.scrollTop;
+    container.scrollTop += velocity;
+    if (container.scrollTop !== previous) {
+      updatePageReorderFromPointer(pageReorderRuntime.pointerClientY);
+    }
+  }
+
+  pageReorderRuntime.autoScrollFrame = requestAnimationFrame(runPageReorderAutoScroll);
+}
+
+function startPageReorderAutoScroll() {
+  if (pageReorderRuntime.autoScrollFrame != null) return;
+  pageReorderRuntime.autoScrollFrame = requestAnimationFrame(runPageReorderAutoScroll);
+}
+
+function bindPageReorderDnD(root, options = {}) {
+  const reorderEnabled = options.reorderEnabled === true;
+  const listEl = root.querySelector("[data-page-list]");
+  const handles = [...root.querySelectorAll("[data-page-drag-handle]")];
+  if (!(listEl instanceof HTMLElement)) return;
+
+  const clearSearchHint = root.querySelector("[data-page-reorder-hint]");
+  if (clearSearchHint instanceof HTMLElement) {
+    clearSearchHint.hidden = reorderEnabled;
+  }
+
+  handles.forEach((handle) => {
+    if (!(handle instanceof HTMLElement)) return;
+    const row = handle.closest("[data-page-row]");
+    if (!(row instanceof HTMLElement)) return;
+    const pageId = row.dataset.pageId;
+    if (!pageId) return;
+    handle.setAttribute("draggable", "false");
+    handle.setAttribute("aria-disabled", reorderEnabled ? "false" : "true");
+
+    handle.addEventListener("dragstart", (event) => {
+      event.preventDefault();
+    });
+
+    handle.addEventListener("pointerdown", (event) => {
+      if (!reorderEnabled || event.button !== 0) return;
+      const state = store.getState();
+      const sourceIndex = state.pages.findIndex((page) => page.id === pageId);
+      if (sourceIndex < 0) return;
+
+      event.preventDefault();
+      resetPageReorderRuntime();
+
+      const rowRect = row.getBoundingClientRect();
+      const pointerX = event.clientX || rowRect.left + rowRect.width / 2;
+      const pointerY = event.clientY || rowRect.top + rowRect.height / 2;
+      const placeholder = createPagePlaceholder(rowRect.height);
+      const floating = createPageFloatingRow(row, rowRect, pointerX, pointerY);
+      pageReorderRuntime.isActive = true;
+      pageReorderRuntime.draggingPageId = pageId;
+      pageReorderRuntime.sourceIndex = sourceIndex;
+      pageReorderRuntime.targetIndex = sourceIndex;
+      pageReorderRuntime.sourceRowEl = row;
+      pageReorderRuntime.placeholderEl = placeholder;
+      pageReorderRuntime.listEl = listEl;
+      pageReorderRuntime.scrollContainerEl = root.closest(".panel-body") || root;
+      pageReorderRuntime.floatingEl = floating;
+      pageReorderRuntime.pointerClientY = pointerY;
+      pageReorderRuntime.pointerId = event.pointerId;
+
+      row.classList.add("is-drag-source");
+      row.style.display = "none";
+      listEl.insertBefore(placeholder, row);
+      moveFloatingRow(pointerX, pointerY);
+      updatePageReorderFromPointer(pointerY);
+
+      const onPointerMove = (moveEvent) => {
+        if (!pageReorderRuntime.isActive) return;
+        if (moveEvent.pointerId !== pageReorderRuntime.pointerId) return;
+        moveEvent.preventDefault();
+        moveFloatingRow(moveEvent.clientX, moveEvent.clientY);
+        updatePageReorderFromPointer(moveEvent.clientY);
+      };
+
+      const onPointerUp = (upEvent) => {
+        if (!pageReorderRuntime.isActive) return;
+        if (upEvent.pointerId !== pageReorderRuntime.pointerId) return;
+        upEvent.preventDefault();
+        const draggedPageId = pageReorderRuntime.draggingPageId;
+        const targetIndex = pageReorderRuntime.targetIndex;
+        const moved = reorderPageToIndex(draggedPageId, targetIndex, { historyLabel: "reorder-page", announce: true });
+        resetPageReorderRuntime();
+        if (moved) {
+          focusPageDragHandle(draggedPageId);
+        }
+      };
+
+      pageReorderRuntime.onPointerMove = onPointerMove;
+      pageReorderRuntime.onPointerUp = onPointerUp;
+      window.addEventListener("pointermove", onPointerMove, true);
+      window.addEventListener("pointerup", onPointerUp, true);
+      window.addEventListener("pointercancel", onPointerUp, true);
+      startPageReorderAutoScroll();
+
+      if (typeof handle.setPointerCapture === "function") {
+        try {
+          handle.setPointerCapture(event.pointerId);
+        } catch (_error) {
+          // Pointer capture can fail in some browser edge-cases; drag still works via window listeners.
+        }
+      }
+    });
+  });
+}
+
+function addComponent(pageId, type, position, options = {}) {
   const current = store.getState();
   const currentPage = findPage(current, pageId);
   if (!currentPage) return;
@@ -1220,7 +1926,7 @@ function addComponent(pageId, type, position) {
       unlockPageModel(page);
     }
 
-    const component = buildComponentFromType(type);
+    const component = buildComponentFromType(type, options);
     applyThemeDefaultsToComponent(component, page.theme);
     const density = Math.max(1, Number(draft.project?.gridDensity) || 1);
     if (density > 1) {
@@ -1246,6 +1952,77 @@ function addComponent(pageId, type, position) {
   scheduleDebouncedAutoReflow("add-component");
 }
 
+function buildUnlockedComponentClone(sourceComponent, profileId, options = {}) {
+  const copy = deepClone(sourceComponent);
+  copy.id = makeComponentId();
+  if (options.appendCopySuffix) {
+    copy.title = `${copy.title || kebabToTitle(copy.type)} (copy)`;
+  }
+  copy.slotId = null;
+  copy.layoutConstraints = {
+    ...(copy.layoutConstraints || {}),
+    locked: false,
+    allowedTypes: null,
+  };
+  const layout = getComponentLayout(copy, profileId);
+  const offsetCol = Number.isFinite(options.offsetCol) ? options.offsetCol : 1;
+  const offsetRow = Number.isFinite(options.offsetRow) ? options.offsetRow : 1;
+  setComponentLayout(copy, profileId, {
+    colStart: Math.min(24, Math.max(1, layout.colStart + offsetCol)),
+    rowStart: Math.min(800, Math.max(1, layout.rowStart + offsetRow)),
+  });
+  return copy;
+}
+
+function copySelectedComponentToClipboard() {
+  const state = store.getState();
+  const { page, component } = selectedEntities(state);
+  if (!page || !component) return false;
+  componentClipboard = {
+    sourcePageId: page.id,
+    component: deepClone(component),
+  };
+  showToast("Component copied");
+  return true;
+}
+
+function pasteComponentFromClipboard(targetPageId = null) {
+  if (!componentClipboard?.component) {
+    showToast("Copy a component first");
+    return false;
+  }
+  const state = store.getState();
+  const pageId = targetPageId || state.ui.selectedPageId || state.ui.activePageId || state.pages[0]?.id;
+  if (!pageId) return false;
+
+  let pastedComponentId = null;
+  let unlockedTemplate = false;
+  store.commit((draft) => {
+    const page = findPage(draft, pageId);
+    if (!page) return;
+    if (page.layoutMode === "template") {
+      unlockPageModel(page);
+      unlockedTemplate = true;
+    }
+    const copy = buildUnlockedComponentClone(componentClipboard.component, draft.project.printProfile, {
+      offsetCol: 1,
+      offsetRow: 1,
+      appendCopySuffix: false,
+    });
+    page.components.push(copy);
+    pastedComponentId = copy.id;
+    draft.ui.selectedPageId = page.id;
+    draft.ui.selectedComponentId = copy.id;
+    draft.ui.activePageId = page.id;
+    draft.ui.pendingDeleteComponentId = null;
+  }, { historyLabel: "paste-component" });
+
+  if (!pastedComponentId) return false;
+  showToast(unlockedTemplate ? "Template unlocked and component pasted" : "Component pasted");
+  scheduleDebouncedAutoReflow("paste-component");
+  return true;
+}
+
 function duplicateComponent(pageId, componentId) {
   const current = store.getState();
   const page = findPage(current, pageId);
@@ -1257,25 +2034,19 @@ function duplicateComponent(pageId, componentId) {
     const component = findComponent(page, componentId);
     if (!component) return;
 
-    const copy = deepClone(component);
-    copy.id = `cmp_${Math.random().toString(16).slice(2)}_${Date.now().toString(16)}`;
-    copy.title = `${copy.title || kebabToTitle(copy.type)} (copy)`;
-    copy.slotId = null;
-    copy.layoutConstraints = {
-      ...(copy.layoutConstraints || {}),
-      locked: false,
-      allowedTypes: null,
-    };
-    const layout = getComponentLayout(copy, draft.project.printProfile);
-    setComponentLayout(copy, draft.project.printProfile, {
-      colStart: Math.min(24, layout.colStart + 1),
-      rowStart: Math.min(800, layout.rowStart + 1),
+    const copy = buildUnlockedComponentClone(component, draft.project.printProfile, {
+      offsetCol: 1,
+      offsetRow: 1,
+      appendCopySuffix: true,
     });
 
     page.components.push(copy);
     draft.ui.selectedPageId = pageId;
     draft.ui.selectedComponentId = copy.id;
+    draft.ui.activePageId = pageId;
+    draft.ui.pendingDeleteComponentId = null;
   }, { historyLabel: "duplicate-component" });
+  showToast("Component duplicated");
   scheduleDebouncedAutoReflow("duplicate-component");
 }
 
@@ -1322,7 +2093,7 @@ function requestOrConfirmDeleteComponent(pageId, componentId, confirmed = false)
       draft.ui.activePageId = pageId;
       draft.ui.pendingDeleteComponentId = componentId;
     }, { skipHistory: true });
-    showToast("Click Confirm to delete component");
+    showToast("Click trash again to delete component");
     return;
   }
   deleteComponent(pageId, componentId);
@@ -2893,7 +3664,8 @@ function renderPalette(state) {
   const descriptions = {
     pages: "Manage page order and add templates.",
     design: "Drag reusable design elements onto the stage.",
-    components: "Add charts, metric blocks and cards to the selected stage page.",
+    components: "Add non-chart components such as KPIs and cards to the selected page.",
+    charts: "Browse chart families, then drag or add chart variants to the selected page.",
     resources: "Manage datasets and assets.",
     styles: "Edit theme tokens and status colors.",
   };
@@ -2901,6 +3673,7 @@ function renderPalette(state) {
     pages: "Pages",
     design: "Design Elements",
     components: "Components",
+    charts: "CH Charts",
     resources: "Resources",
     styles: "Styles",
   };
@@ -2910,129 +3683,214 @@ function renderPalette(state) {
   refs.workbenchRail?.querySelectorAll("[data-tool]").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.tool === tool);
   });
+  if (tool !== "pages" && pageReorderRuntime.isActive) {
+    resetPageReorderRuntime({ restoreSource: false });
+  }
 
   if (tool === "pages") {
-    const pageSearch = (state.ui.pageSearch || "").toLowerCase();
+    const pagePanelTab = state.ui.pagePanelTab === "templates" ? "templates" : "pages";
+    const pageSearchRaw = state.ui.pageSearch || "";
+    const pageSearch = pageSearchRaw.toLowerCase();
+    const templateSearchRaw = state.ui.templateSearch || "";
+    const templateSearch = templateSearchRaw.toLowerCase().trim();
+    const reorderEnabled = pagePanelTab === "pages" && pageSearchRaw.trim().length === 0;
+    if (pagePanelTab !== "pages" && pageReorderRuntime.isActive) {
+      resetPageReorderRuntime({ restoreSource: false });
+    }
     const selectedPage = findPage(state, state.ui.selectedPageId || state.ui.activePageId);
-    const warningList = selectedPage ? state.ui.warnings?.[selectedPage.id] || [] : [];
+    const pageSettingsTarget = findPage(state, state.ui.pageSettingsPageId);
     const pages = (state.pages || []).filter((page) => {
       if (!pageSearch) return true;
       return `${page.title || ""} ${page.templateId || ""}`.toLowerCase().includes(pageSearch);
     });
-    root.innerHTML = `
-      <div class="form-group">
-        <label>Search Pages</label>
-        <input class="form-input" id="pageSearch" placeholder="Find pages" value="${escapeHtml(state.ui.pageSearch || "")}">
-      </div>
-      <details class="drawer-section" open>
-        <summary>Report Pages</summary>
-        <div class="drawer-list">
+    const templateMatches = TEMPLATE_LIBRARY.filter((template) => {
+      const text = `${template.label} ${template.description} ${(template.tags || []).join(" ")}`.toLowerCase();
+      return !templateSearch || text.includes(templateSearch);
+    });
+    const pageSettingsFlyoutHtml = (page) => {
+      const warningList = state.ui.warnings?.[page.id] || [];
+      return `
+        <div class="drawer-list-settings-row page-settings-flyout" data-page-settings-flyout data-page-settings-for="${page.id}">
+          <div class="page-settings-flyout__head">
+            <strong>Page Settings</strong>
+            <button class="icon-btn" type="button" data-close-page-settings>Close</button>
+          </div>
+          <div class="form-grid">
+            <div class="form-group"><label>Page Title</label><input class="form-input" id="pageTitleFlyout" value="${escapeHtml(page.title || "")}"></div>
+            <div class="form-group"><label>Subtitle</label><input class="form-input" id="pageSubtitleFlyout" value="${escapeHtml(page.subtitle || "")}"></div>
+          </div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Theme</label>
+              <select class="form-select" id="pageThemeFlyout">
+                <option value="light_data" ${page.theme === "light_data" ? "selected" : ""}>Light data</option>
+                <option value="dark_intro" ${page.theme === "dark_intro" ? "selected" : ""}>Dark intro</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Page kind</label>
+              <select class="form-select" id="pageKindFlyout">
+                <option value="${PAGE_KINDS.cover}" ${page.pageKind === PAGE_KINDS.cover ? "selected" : ""}>Cover</option>
+                <option value="${PAGE_KINDS.divider}" ${page.pageKind === PAGE_KINDS.divider ? "selected" : ""}>Divider</option>
+                <option value="${PAGE_KINDS.agenda}" ${page.pageKind === PAGE_KINDS.agenda ? "selected" : ""}>Agenda</option>
+                <option value="${PAGE_KINDS.content}" ${page.pageKind === PAGE_KINDS.content ? "selected" : ""}>Content</option>
+                <option value="${PAGE_KINDS.end}" ${page.pageKind === PAGE_KINDS.end ? "selected" : ""}>End</option>
+                <option value="${PAGE_KINDS.custom}" ${page.pageKind === PAGE_KINDS.custom ? "selected" : ""}>Custom</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Show grid</label>
+              <select class="form-select" id="pageGridFlyout">
+                <option value="false" ${!page.showGrid ? "selected" : ""}>No</option>
+                <option value="true" ${page.showGrid ? "selected" : ""}>Yes</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Layout mode</label>
+            <select class="form-select" id="pageLayoutModeFlyout">
+              <option value="template" ${page.layoutMode === "template" ? "selected" : ""}>Template locked</option>
+              <option value="free" ${page.layoutMode === "free" ? "selected" : ""}>Free layout</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Full bleed page</label>
+            <select class="form-select" id="pageFullBleedFlyout">
+              <option value="false" ${!page.fullBleed ? "selected" : ""}>No</option>
+              <option value="true" ${page.fullBleed ? "selected" : ""}>Yes</option>
+            </select>
+            <div class="helper">Use for cover/intro pages that need edge-to-edge backgrounds.</div>
+          </div>
           ${
-            pages.length
-              ? pages
-                  .map(
-                    (page) => `
-                    <div class="drawer-list-row">
-                      <button class="drawer-list-item ${state.ui.activePageId === page.id ? "is-active" : ""}" type="button" data-select-page="${page.id}">
-                        <strong>${escapeHtml(page.title || page.templateId || "Untitled Page")}</strong>
-                      </button>
-                      <div class="drawer-item-actions">
-                        <button class="mini-btn" type="button" data-page-up="${page.id}">↑</button>
-                        <button class="mini-btn" type="button" data-page-down="${page.id}">↓</button>
-                        <button class="mini-btn" type="button" data-page-dup="${page.id}">Copy</button>
-                        <button class="mini-btn mini-btn--danger" type="button" data-page-del="${page.id}">Del</button>
-                      </div>
-                    </div>
-                  `,
-                  )
-                  .join("")
-              : `<div class="inspector-empty">No pages found.</div>`
+            warningList.length
+              ? `<div class="warning-list">Overflow detected in ${warningList.length} component(s).</div>`
+              : ""
           }
         </div>
-      </details>
-      <details class="drawer-section" open>
-        <summary>Page Settings</summary>
-        ${
-          !selectedPage
-            ? '<div class="inspector-empty">Select a page to edit settings.</div>'
-            : `
-              <div class="form-grid" style="margin-top:8px;">
-                <div class="form-group"><label>Page Title</label><input class="form-input" id="pageTitleLeft" value="${escapeHtml(selectedPage.title || "")}"></div>
-                <div class="form-group"><label>Subtitle</label><input class="form-input" id="pageSubtitleLeft" value="${escapeHtml(selectedPage.subtitle || "")}"></div>
+      `;
+    };
+    root.innerHTML = `
+      <div class="drawer-tabs">
+        <button class="drawer-tab-btn ${pagePanelTab === "pages" ? "is-active" : ""}" type="button" data-page-panel-tab="pages">Pages</button>
+        <button class="drawer-tab-btn ${pagePanelTab === "templates" ? "is-active" : ""}" type="button" data-page-panel-tab="templates">Templates</button>
+      </div>
+      ${
+        pagePanelTab === "pages"
+          ? `
+            <div class="form-group">
+              <label>Search Pages</label>
+              <input class="form-input" id="pageSearch" placeholder="Find pages" value="${escapeHtml(state.ui.pageSearch || "")}">
+            </div>
+            <details class="drawer-section" open>
+              <summary>Report Pages</summary>
+              <div class="helper drawer-reorder-hint" data-page-reorder-hint ${reorderEnabled ? "hidden" : ""}>Clear search to reorder pages.</div>
+              <div class="sr-only" id="pageReorderLive" aria-live="polite" aria-atomic="true"></div>
+              <div class="drawer-list" data-page-list>
+                ${
+                  pages.length
+                    ? pages
+                        .map(
+                          (page) => `
+                          <div class="drawer-list-row ${state.ui.activePageId === page.id ? "is-active" : ""} ${state.ui.pageSettingsPageId === page.id ? "is-settings-open" : ""}" data-page-row data-page-id="${page.id}">
+                            <button
+                              class="drawer-drag-handle"
+                              type="button"
+                              draggable="${reorderEnabled ? "true" : "false"}"
+                              data-page-drag-handle
+                              data-page-id="${page.id}"
+                              aria-label="Reorder ${escapeHtml(pageLabel(page))}"
+                              title="${reorderEnabled ? "Drag to reorder page" : "Clear search to reorder pages"}"
+                              ${reorderEnabled ? "" : "disabled"}
+                            >
+                              <span aria-hidden="true">⋮⋮</span>
+                            </button>
+                            <button class="drawer-list-item" type="button" data-select-page="${page.id}">
+                              <strong>${escapeHtml(page.title || page.templateId || "Untitled Page")}</strong>
+                            </button>
+                            <div class="drawer-item-actions">
+                              <button class="mini-btn mini-btn--icon" type="button" data-page-dup="${page.id}" aria-label="Copy page" title="Copy page">
+                                <span class="icon-duplicate" aria-hidden="true"></span>
+                                <span class="sr-only">Copy page</span>
+                              </button>
+                              <button class="mini-btn mini-btn--icon mini-btn--danger" type="button" data-page-del="${page.id}" aria-label="Delete page" title="Delete page">
+                                <span class="icon-trash" aria-hidden="true"></span>
+                                <span class="sr-only">Delete page</span>
+                              </button>
+                              <button class="mini-btn mini-btn--icon ${state.ui.pageSettingsPageId === page.id ? "is-active" : ""}" type="button" data-page-settings="${page.id}" aria-label="Page settings" title="Page settings">
+                                <span class="icon-cog" aria-hidden="true"></span>
+                                <span class="sr-only">Page settings</span>
+                              </button>
+                            </div>
+                          </div>
+                          ${state.ui.pageSettingsPageId === page.id ? pageSettingsFlyoutHtml(page) : ""}
+                        `,
+                        )
+                        .join("")
+                    : `<div class="inspector-empty">No pages found.</div>`
+                }
               </div>
-              <div class="form-grid">
-                <div class="form-group">
-                  <label>Theme</label>
-                  <select class="form-select" id="pageThemeLeft">
-                    <option value="light_data" ${selectedPage.theme === "light_data" ? "selected" : ""}>Light data</option>
-                    <option value="dark_intro" ${selectedPage.theme === "dark_intro" ? "selected" : ""}>Dark intro</option>
-                  </select>
-                </div>
-                <div class="form-group">
-                  <label>Page kind</label>
-                  <select class="form-select" id="pageKindLeft">
-                    <option value="${PAGE_KINDS.cover}" ${selectedPage.pageKind === PAGE_KINDS.cover ? "selected" : ""}>Cover</option>
-                    <option value="${PAGE_KINDS.divider}" ${selectedPage.pageKind === PAGE_KINDS.divider ? "selected" : ""}>Divider</option>
-                    <option value="${PAGE_KINDS.agenda}" ${selectedPage.pageKind === PAGE_KINDS.agenda ? "selected" : ""}>Agenda</option>
-                    <option value="${PAGE_KINDS.content}" ${selectedPage.pageKind === PAGE_KINDS.content ? "selected" : ""}>Content</option>
-                    <option value="${PAGE_KINDS.end}" ${selectedPage.pageKind === PAGE_KINDS.end ? "selected" : ""}>End</option>
-                    <option value="${PAGE_KINDS.custom}" ${selectedPage.pageKind === PAGE_KINDS.custom ? "selected" : ""}>Custom</option>
-                  </select>
-                </div>
-                <div class="form-group">
-                  <label>Show grid</label>
-                  <select class="form-select" id="pageGridLeft">
-                    <option value="false" ${!selectedPage.showGrid ? "selected" : ""}>No</option>
-                    <option value="true" ${selectedPage.showGrid ? "selected" : ""}>Yes</option>
-                  </select>
-                </div>
+            </details>
+            ${
+              pageSettingsTarget
+                ? ""
+                : '<div class="helper" style="margin:8px 0 10px;">Use the settings icon on a page row to open page settings.</div>'
+            }
+          `
+          : `
+            <div class="form-group">
+              <label>Search Templates</label>
+              <input class="form-input" id="templateSearch" placeholder="Find templates" value="${escapeHtml(templateSearchRaw)}">
+            </div>
+            <details class="drawer-section" open>
+              <summary>Add From Template</summary>
+              <div class="drawer-card-list">
+                ${
+                  templateMatches.length
+                    ? templateMatches
+                        .map(
+                          (template) => `
+                            <div class="drawer-card" draggable="true" data-drag="template:${template.id}">
+                              <strong>${escapeHtml(template.label)}</strong>
+                              <span>${escapeHtml(template.description)}</span>
+                              <button class="icon-btn" type="button" data-add-template="${template.id}">Add</button>
+                            </div>
+                          `,
+                        )
+                        .join("")
+                    : '<div class="inspector-empty">No templates match this search.</div>'
+                }
               </div>
-              <div class="form-group">
-                <label>Layout mode</label>
-                <select class="form-select" id="pageLayoutModeLeft">
-                  <option value="template" ${selectedPage.layoutMode === "template" ? "selected" : ""}>Template locked</option>
-                  <option value="free" ${selectedPage.layoutMode === "free" ? "selected" : ""}>Free layout</option>
-                </select>
-              </div>
-              <div class="form-group">
-                <label>Full bleed page</label>
-                <select class="form-select" id="pageFullBleedLeft">
-                  <option value="false" ${!selectedPage.fullBleed ? "selected" : ""}>No</option>
-                  <option value="true" ${selectedPage.fullBleed ? "selected" : ""}>Yes</option>
-                </select>
-                <div class="helper">Use for cover/intro pages that need edge-to-edge backgrounds.</div>
-              </div>
-              ${
-                warningList.length
-                  ? `<div class="warning-list">Overflow detected in ${warningList.length} component(s).</div>`
-                  : ""
-              }
-            `
-        }
-      </details>
-      <details class="drawer-section">
-        <summary>Add From Template</summary>
-        <div class="drawer-card-list">
-          ${TEMPLATE_LIBRARY.map(
-            (template) => `
-              <div class="drawer-card">
-                <strong>${escapeHtml(template.label)}</strong>
-                <span>${escapeHtml(template.description)}</span>
-                <button class="icon-btn" type="button" data-add-template="${template.id}">Add</button>
-              </div>
-            `,
-          ).join("")}
-        </div>
-      </details>
-      <div class="form-group" style="margin-top:10px;">
+            </details>
+          `
+      }
+      <div class="form-grid" style="margin-top:10px;">
         <button class="btn" type="button" id="btnAddCustomPageLeft">Add Custom Page</button>
+        <button class="btn" type="button" id="btnAddMissingDefaultsLeft">Add Missing Default Pages</button>
+        <button class="btn btn--danger" type="button" id="btnResetSamplePackLeft">Reset Sample Pack</button>
       </div>
     `;
+
+    root.querySelectorAll("[data-page-panel-tab]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const nextTab = button.dataset.pagePanelTab === "templates" ? "templates" : "pages";
+        store.commit((draft) => {
+          draft.ui.pagePanelTab = nextTab;
+          if (nextTab === "templates") {
+            draft.ui.pageSettingsPageId = null;
+          }
+        }, { historyLabel: "ui-page-panel-tab", skipHistory: true });
+      });
+    });
 
     root.querySelector("#pageSearch")?.addEventListener("input", (event) => {
       store.commit((draft) => {
         draft.ui.pageSearch = event.target.value;
       }, { historyLabel: "ui-page-search", skipHistory: true });
+    });
+    root.querySelector("#templateSearch")?.addEventListener("input", (event) => {
+      store.commit((draft) => {
+        draft.ui.templateSearch = event.target.value;
+      }, { historyLabel: "ui-template-search", skipHistory: true });
     });
     root.querySelectorAll("[data-select-page]").forEach((button) => {
       button.addEventListener("click", () => {
@@ -3041,55 +3899,103 @@ function renderPalette(state) {
         jumpToPage(pageId, "smooth");
       });
     });
-    root.querySelectorAll("[data-page-up]").forEach((button) => {
-      button.addEventListener("click", () => movePage(button.dataset.pageUp, -1));
+    root.querySelectorAll("[data-page-settings]").forEach((button) => {
+      button.addEventListener("pointerdown", (event) => {
+        event.stopPropagation();
+      });
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const pageId = button.dataset.pageSettings;
+        if (!pageId) return;
+        store.commit((draft) => {
+          const isOpen = draft.ui.pageSettingsPageId === pageId;
+          draft.ui.pageSettingsPageId = isOpen ? null : pageId;
+          draft.ui.pagePanelTab = "pages";
+          if (!isOpen) {
+            draft.ui.selectedPageId = pageId;
+            draft.ui.activePageId = pageId;
+            draft.ui.selectedComponentId = null;
+            draft.ui.pendingDeleteComponentId = null;
+          }
+        }, { historyLabel: "ui-page-settings", skipHistory: true });
+      });
     });
-    root.querySelectorAll("[data-page-down]").forEach((button) => {
-      button.addEventListener("click", () => movePage(button.dataset.pageDown, 1));
+    root.querySelector("[data-close-page-settings]")?.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      store.commit((draft) => {
+        draft.ui.pageSettingsPageId = null;
+      }, { historyLabel: "ui-page-settings", skipHistory: true });
     });
     root.querySelectorAll("[data-page-dup]").forEach((button) => {
-      button.addEventListener("click", () => duplicatePage(button.dataset.pageDup));
+      button.addEventListener("pointerdown", (event) => {
+        event.stopPropagation();
+      });
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        duplicatePage(button.dataset.pageDup);
+      });
     });
     root.querySelectorAll("[data-page-del]").forEach((button) => {
-      button.addEventListener("click", () => deletePage(button.dataset.pageDel));
+      button.addEventListener("pointerdown", (event) => {
+        event.stopPropagation();
+      });
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        deletePage(button.dataset.pageDel);
+      });
     });
+    if (pagePanelTab === "pages") {
+      bindPageReorderDnD(root, { reorderEnabled });
+    }
     root.querySelectorAll("[data-add-template]").forEach((button) => {
       button.addEventListener("click", () => addPageFromTemplate(button.dataset.addTemplate));
     });
-    root.querySelector("#pageTitleLeft")?.addEventListener("input", (event) => {
-      if (!selectedPage) return;
-      updatePage(selectedPage.id, { title: event.target.value });
+    root.querySelectorAll("[data-drag]").forEach((node) => {
+      node.addEventListener("dragstart", (event) => {
+        const [kind, value] = node.dataset.drag.split(":");
+        if (kind === "template") setDragData(event, { kind: "new-page-template", templateId: value });
+      });
     });
-    root.querySelector("#pageSubtitleLeft")?.addEventListener("input", (event) => {
-      if (!selectedPage) return;
-      updatePage(selectedPage.id, { subtitle: event.target.value });
+    root.querySelector("#pageTitleFlyout")?.addEventListener("input", (event) => {
+      if (!pageSettingsTarget) return;
+      updatePage(pageSettingsTarget.id, { title: event.target.value });
     });
-    root.querySelector("#pageThemeLeft")?.addEventListener("change", (event) => {
-      if (!selectedPage) return;
-      updatePage(selectedPage.id, { theme: event.target.value });
+    root.querySelector("#pageSubtitleFlyout")?.addEventListener("input", (event) => {
+      if (!pageSettingsTarget) return;
+      updatePage(pageSettingsTarget.id, { subtitle: event.target.value });
     });
-    root.querySelector("#pageKindLeft")?.addEventListener("change", (event) => {
-      if (!selectedPage) return;
-      updatePage(selectedPage.id, { pageKind: event.target.value }, "page-kind");
+    root.querySelector("#pageThemeFlyout")?.addEventListener("change", (event) => {
+      if (!pageSettingsTarget) return;
+      updatePage(pageSettingsTarget.id, { theme: event.target.value });
     });
-    root.querySelector("#pageGridLeft")?.addEventListener("change", (event) => {
-      if (!selectedPage) return;
-      updatePage(selectedPage.id, { showGrid: event.target.value === "true" }, "grid");
+    root.querySelector("#pageKindFlyout")?.addEventListener("change", (event) => {
+      if (!pageSettingsTarget) return;
+      updatePage(pageSettingsTarget.id, { pageKind: event.target.value }, "page-kind");
     });
-    root.querySelector("#pageLayoutModeLeft")?.addEventListener("change", (event) => {
-      if (!selectedPage) return;
+    root.querySelector("#pageGridFlyout")?.addEventListener("change", (event) => {
+      if (!pageSettingsTarget) return;
+      updatePage(pageSettingsTarget.id, { showGrid: event.target.value === "true" }, "grid");
+    });
+    root.querySelector("#pageLayoutModeFlyout")?.addEventListener("change", (event) => {
+      if (!pageSettingsTarget) return;
       const nextMode = event.target.value;
       if (nextMode === "free") {
-        unlockPage(selectedPage.id, "page-mode");
+        unlockPage(pageSettingsTarget.id, "page-mode");
         return;
       }
-      updatePage(selectedPage.id, { layoutMode: nextMode }, "page-mode");
+      updatePage(pageSettingsTarget.id, { layoutMode: nextMode }, "page-mode");
     });
-    root.querySelector("#pageFullBleedLeft")?.addEventListener("change", (event) => {
-      if (!selectedPage) return;
-      updatePage(selectedPage.id, { fullBleed: event.target.value === "true" }, "page-full-bleed");
+    root.querySelector("#pageFullBleedFlyout")?.addEventListener("change", (event) => {
+      if (!pageSettingsTarget) return;
+      updatePage(pageSettingsTarget.id, { fullBleed: event.target.value === "true" }, "page-full-bleed");
     });
     root.querySelector("#btnAddCustomPageLeft")?.addEventListener("click", () => addCustomPage());
+    root.querySelector("#btnAddMissingDefaultsLeft")?.addEventListener("click", addMissingDefaultPages);
+    root.querySelector("#btnResetSamplePackLeft")?.addEventListener("click", resetSamplePack);
     return;
   }
 
@@ -3150,6 +4056,82 @@ function renderPalette(state) {
     return;
   }
 
+  if (tool === "charts") {
+    const searchRaw = state.ui.chartSearch || "";
+    const search = String(searchRaw).toLowerCase().trim();
+    const family = String(state.ui.chartFamily || "all").trim().toLowerCase();
+    const familyOptions = CHART_FAMILY_OPTIONS;
+    const variants = chartVariantsForFamily(family).filter((variant) => {
+      const text = `${variant.label} ${variant.description || ""} ${variant.family}`.toLowerCase();
+      return !search || text.includes(search);
+    });
+
+    root.innerHTML = `
+      <div class="chart-gallery-controls">
+        <div class="form-group">
+          <label>Family</label>
+          <select class="form-select" id="chartFamily">
+            ${familyOptions
+              .map((option) => `<option value="${option.key}" ${option.key === family ? "selected" : ""}>${escapeHtml(option.label)}</option>`)
+              .join("")}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Search</label>
+          <input class="form-input" id="chartSearch" placeholder="Find chart variants" value="${escapeHtml(searchRaw)}">
+        </div>
+      </div>
+      <details class="drawer-section" open>
+        <summary>Chart Variants</summary>
+        <div class="chart-variant-grid">
+          ${
+            variants.length
+              ? variants.map((variant) => chartVariantCardHtml(variant)).join("")
+              : '<div class="inspector-empty">No chart variants match this filter.</div>'
+          }
+        </div>
+      </details>
+    `;
+
+    root.querySelector("#chartFamily")?.addEventListener("change", (event) => {
+      store.commit((draft) => {
+        draft.ui.chartFamily = event.target.value;
+      }, { historyLabel: "ui-chart-family", skipHistory: true });
+    });
+    root.querySelector("#chartSearch")?.addEventListener("input", (event) => {
+      store.commit((draft) => {
+        draft.ui.chartSearch = event.target.value;
+      }, { historyLabel: "ui-chart-search", skipHistory: true });
+    });
+    root.querySelectorAll("[data-add-chart-variant]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const chartVariant = button.dataset.addChartVariant;
+        const snapshot = store.getState();
+        const targetPageId = snapshot.ui.selectedPageId || snapshot.ui.activePageId || snapshot.pages[0]?.id;
+        if (!targetPageId) {
+          addCustomPage();
+          const fallbackPage = store.getState().pages[0]?.id;
+          if (!fallbackPage) return;
+          addComponent(fallbackPage, "chart", { colStart: 1, rowStart: 1 }, { chartVariant });
+          return;
+        }
+        addComponent(targetPageId, "chart", { colStart: 1, rowStart: 1 }, { chartVariant });
+      });
+    });
+    root.querySelectorAll("[data-drag]").forEach((node) => {
+      node.addEventListener("dragstart", (event) => {
+        const [kind, value] = node.dataset.drag.split(":");
+        if (kind !== "chart") return;
+        setDragData(event, {
+          kind: "new-component",
+          componentType: "chart",
+          componentOptions: { chartVariant: value },
+        });
+      });
+    });
+    return;
+  }
+
   if (tool === "resources") {
     root.innerHTML = `
       ${renderResourceLists(state)}
@@ -3179,6 +4161,9 @@ function renderPalette(state) {
       <div class="form-group" style="margin-top:10px;">
         <button class="btn" type="button" id="btnResetStyleTokens">Reset Theme Tokens</button>
       </div>
+      <div class="form-group">
+        <button class="btn" type="button" id="btnResetAllChartStyles">Reset All Chart Styles to Brand Defaults</button>
+      </div>
     `;
     root.querySelectorAll("[data-style-token]").forEach((input) => {
       input.addEventListener("input", (event) => {
@@ -3196,6 +4181,9 @@ function renderPalette(state) {
         draft.theme.tokens = {};
       }, { historyLabel: "style-reset" });
     });
+    root.querySelector("#btnResetAllChartStyles")?.addEventListener("click", () => {
+      resetAllChartStylesToBrandDefaults();
+    });
     return;
   }
 
@@ -3209,7 +4197,6 @@ function renderPalette(state) {
     "all",
     "layouts",
     "metrics",
-    "charts",
     "cards",
     "benchmark",
     "intro",
@@ -3240,7 +4227,6 @@ function renderPalette(state) {
 
   const componentGroups = [
     { key: "metrics", label: "Metric Elements", hint: "Single-value metric components." },
-    { key: "charts", label: "Chart Elements", hint: "Trend and comparison chart components." },
     { key: "cards", label: "Card Elements", hint: "Structured narrative and status cards." },
   ];
 
@@ -3262,7 +4248,6 @@ function renderPalette(state) {
         <option value="all" ${filter === "all" ? "selected" : ""}>All</option>
         <option value="layouts" ${filter === "layouts" ? "selected" : ""}>Page Layout Templates</option>
         <option value="metrics" ${filter === "metrics" ? "selected" : ""}>Metric Elements</option>
-        <option value="charts" ${filter === "charts" ? "selected" : ""}>Chart Elements</option>
         <option value="cards" ${filter === "cards" ? "selected" : ""}>Card Elements</option>
         <option value="benchmark" ${filter === "benchmark" ? "selected" : ""}>Layouts: Benchmark</option>
         <option value="intro" ${filter === "intro" ? "selected" : ""}>Layouts: Intro</option>
@@ -3370,6 +4355,7 @@ function renderPages(state) {
     setTextTarget: setCanvasTextTarget,
     commitInlineTextEdit,
     openComponentEditor,
+    toggleComponentEditor,
     requestOrConfirmDeleteComponent,
     addComponent,
     moveComponent,
@@ -3406,6 +4392,247 @@ function renderPages(state) {
 function renderBindingEditor(state, page, component) {
   if (!BINDABLE_TYPES.has(component.type)) {
     return "";
+  }
+
+  if (component.type === "chart") {
+    const chartProps = component.props?.chart || {};
+    const variantMeta = chartVariantById(chartProps.variant || "line_single");
+    const familyOptions = CHART_FAMILY_OPTIONS.filter((option) => option.key !== "all");
+    const family = familyOptions.some((option) => option.key === chartProps.family)
+      ? chartProps.family
+      : variantMeta.family;
+    const variants = chartVariantsForFamily(family);
+    const activeVariant = variants.find((variant) => variant.id === variantMeta.id)?.id || variants[0]?.id || variantMeta.id;
+    const existingBinding = Array.isArray(component.dataBindings)
+      ? component.dataBindings.find((binding) => String(binding?.mode || "").startsWith("chart_roles"))
+      : null;
+    const datasetId = existingBinding?.datasetId || "";
+    const draftBinding = buildChartBindingDraft(component, state.datasets, datasetId);
+    const columns = state.datasets.find((dataset) => dataset.id === datasetId)?.columns || [];
+    const mapping = draftBinding.mapping || {};
+    const transforms = draftBinding.transforms || {};
+    const visual = chartProps.visual || {};
+    const axis = chartProps.axis || {};
+    const format = chartProps.format || {};
+    const paletteOverrideInput = parsePaletteOverrideInput(visual.paletteOverride || visual.palette).join(", ");
+    const columnOptions = (selected, blankLabel = "Select", allowBlank = true) => [
+      allowBlank ? `<option value="">${blankLabel}</option>` : "",
+      ...columns.map((column) => `<option value="${escapeHtml(column.key)}" ${selected === column.key ? "selected" : ""}>${escapeHtml(column.key)}</option>`),
+    ].join("");
+    const yPrimary = Array.isArray(mapping.y) ? mapping.y[0] || "" : "";
+    const ySecondary = Array.isArray(mapping.y) ? mapping.y[1] || "" : "";
+
+    return `
+      <div class="hr"></div>
+      <div class="form-group">
+        <label>Chart Binding</label>
+        <div class="helper">Basic controls configure chart type, data roles and transforms. Advanced controls tune axes and formatting.</div>
+      </div>
+      <details class="drawer-section" open>
+        <summary>Basic</summary>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Dataset</label>
+            <select class="form-select" id="bindDataset">
+              <option value="">None</option>
+              ${state.datasets
+                .map((dataset) => `<option value="${dataset.id}" ${dataset.id === datasetId ? "selected" : ""}>${escapeHtml(dataset.name)}</option>`)
+                .join("")}
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Family</label>
+            <select class="form-select" id="chartFamily">
+              ${familyOptions
+                .map((option) => `<option value="${option.key}" ${option.key === family ? "selected" : ""}>${escapeHtml(option.label)}</option>`)
+                .join("")}
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Variant</label>
+            <select class="form-select" id="chartVariant">
+              ${variants
+                .map((variant) => `<option value="${variant.id}" ${variant.id === activeVariant ? "selected" : ""}>${escapeHtml(variant.label)}</option>`)
+                .join("")}
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Aggregation</label>
+            <select class="form-select" id="bindAgg">
+              <option value="sum" ${transforms.aggregation === "sum" ? "selected" : ""}>Sum</option>
+              <option value="avg" ${transforms.aggregation === "avg" ? "selected" : ""}>Average</option>
+              <option value="min" ${transforms.aggregation === "min" ? "selected" : ""}>Min</option>
+              <option value="max" ${transforms.aggregation === "max" ? "selected" : ""}>Max</option>
+              <option value="count" ${transforms.aggregation === "count" ? "selected" : ""}>Count</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>X Role</label>
+            <select class="form-select" id="bindXCol">${columnOptions(mapping.x, "Select x column")}</select>
+          </div>
+          <div class="form-group">
+            <label>Y Role</label>
+            <select class="form-select" id="bindYCol">${columnOptions(yPrimary, "Select y column")}</select>
+          </div>
+          <div class="form-group">
+            <label>Y Role (Additional)</label>
+            <select class="form-select" id="bindYCol2">${columnOptions(ySecondary, "Optional")}</select>
+          </div>
+          <div class="form-group">
+            <label>Secondary Axis (Y2)</label>
+            <select class="form-select" id="bindY2Col">${columnOptions(mapping.y2, "Optional")}</select>
+          </div>
+          <div class="form-group">
+            <label>Series Role</label>
+            <select class="form-select" id="bindSeriesCol">${columnOptions(mapping.series, "Optional")}</select>
+          </div>
+          <div class="form-group">
+            <label>Size Role (Bubble)</label>
+            <select class="form-select" id="bindSizeCol">${columnOptions(mapping.size, "Optional")}</select>
+          </div>
+          <div class="form-group">
+            <label>Color Role</label>
+            <select class="form-select" id="bindColorCol">${columnOptions(mapping.color, "Optional")}</select>
+          </div>
+          <div class="form-group">
+            <label>Target Role</label>
+            <select class="form-select" id="bindTargetCol">${columnOptions(mapping.target, "Optional")}</select>
+          </div>
+          <div class="form-group">
+            <label>Label Role</label>
+            <select class="form-select" id="bindLabelCol">${columnOptions(mapping.label, "Optional")}</select>
+          </div>
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Sort By</label>
+            <select class="form-select" id="bindSortBy">
+              <option value="x" ${transforms.sortBy === "x" ? "selected" : ""}>X</option>
+              <option value="y" ${transforms.sortBy === "y" ? "selected" : ""}>Y</option>
+              <option value="series" ${transforms.sortBy === "series" ? "selected" : ""}>Series</option>
+              <option value="target" ${transforms.sortBy === "target" ? "selected" : ""}>Target</option>
+              <option value="none" ${transforms.sortBy === "none" ? "selected" : ""}>None</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Sort Direction</label>
+            <select class="form-select" id="bindSortDir">
+              <option value="asc" ${transforms.sortDir === "asc" ? "selected" : ""}>Ascending</option>
+              <option value="desc" ${transforms.sortDir === "desc" ? "selected" : ""}>Descending</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Top N</label>
+            <input class="form-input" id="bindTopN" type="number" min="1" value="${escapeHtml(String(transforms.topN || ""))}" placeholder="All">
+          </div>
+          <div class="form-group">
+            <label>Stack Mode</label>
+            <select class="form-select" id="bindStackMode">
+              <option value="none" ${transforms.stackMode === "none" ? "selected" : ""}>None</option>
+              <option value="stack" ${transforms.stackMode === "stack" ? "selected" : ""}>Stack</option>
+              <option value="percent" ${transforms.stackMode === "percent" ? "selected" : ""}>100%</option>
+            </select>
+          </div>
+        </div>
+      </details>
+      <details class="drawer-section">
+        <summary>Advanced</summary>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>X Axis Type</label>
+            <select class="form-select" id="chartAxisXType">
+              <option value="auto" ${axis.xType === "auto" ? "selected" : ""}>Auto</option>
+              <option value="category" ${axis.xType === "category" ? "selected" : ""}>Category</option>
+              <option value="value" ${axis.xType === "value" ? "selected" : ""}>Value</option>
+              <option value="time" ${axis.xType === "time" ? "selected" : ""}>Time</option>
+              <option value="log" ${axis.xType === "log" ? "selected" : ""}>Log</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Date Axis Mode</label>
+            <select class="form-select" id="chartDateMode">
+              <option value="auto" ${axis.dateMode === "auto" ? "selected" : ""}>Auto</option>
+              <option value="time" ${axis.dateMode === "time" ? "selected" : ""}>Time</option>
+              <option value="category" ${axis.dateMode === "category" ? "selected" : ""}>Category</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Y Min</label>
+            <input class="form-input" id="chartYMin" type="number" step="any" value="${escapeHtml(axis.yMin ?? "")}">
+          </div>
+          <div class="form-group">
+            <label>Y Max</label>
+            <input class="form-input" id="chartYMax" type="number" step="any" value="${escapeHtml(axis.yMax ?? "")}">
+          </div>
+          <div class="form-group">
+            <label>Y2 Min</label>
+            <input class="form-input" id="chartY2Min" type="number" step="any" value="${escapeHtml(axis.y2Min ?? "")}">
+          </div>
+          <div class="form-group">
+            <label>Y2 Max</label>
+            <input class="form-input" id="chartY2Max" type="number" step="any" value="${escapeHtml(axis.y2Max ?? "")}">
+          </div>
+          <div class="form-group">
+            <label>Show Legend</label>
+            <select class="form-select" id="chartShowLegend">
+              <option value="true" ${visual.showLegend !== false ? "selected" : ""}>Yes</option>
+              <option value="false" ${visual.showLegend === false ? "selected" : ""}>No</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Show Labels</label>
+            <select class="form-select" id="chartShowLabels">
+              <option value="true" ${visual.showLabels === true ? "selected" : ""}>Yes</option>
+              <option value="false" ${visual.showLabels !== true ? "selected" : ""}>No</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Smooth Lines</label>
+            <select class="form-select" id="chartSmooth">
+              <option value="true" ${visual.smooth === true ? "selected" : ""}>Yes</option>
+              <option value="false" ${visual.smooth !== true ? "selected" : ""}>No</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Step Lines</label>
+            <select class="form-select" id="chartStep">
+              <option value="true" ${visual.step === true ? "selected" : ""}>Yes</option>
+              <option value="false" ${visual.step !== true ? "selected" : ""}>No</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Use Brand Defaults</label>
+            <select class="form-select" id="chartUseBrandDefaults">
+              <option value="true" ${visual.useBrandDefaults !== false ? "selected" : ""}>Yes</option>
+              <option value="false" ${visual.useBrandDefaults === false ? "selected" : ""}>No</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Palette Override</label>
+            <input class="form-input" id="chartPalette" placeholder="#3C64FF,#F23F55,#12DD7E" value="${escapeHtml(paletteOverrideInput)}">
+          </div>
+          <div class="form-group">
+            <label>Decimals</label>
+            <input class="form-input" id="chartDecimals" type="number" min="0" max="8" value="${escapeHtml(format.decimals ?? "")}">
+          </div>
+          <div class="form-group">
+            <label>Prefix</label>
+            <input class="form-input" id="chartPrefix" value="${escapeHtml(format.prefix || "")}">
+          </div>
+          <div class="form-group">
+            <label>Suffix</label>
+            <input class="form-input" id="chartSuffix" value="${escapeHtml(format.suffix || "")}">
+          </div>
+        </div>
+      </details>
+      <div class="form-grid">
+        <button class="btn" type="button" id="btnApplyBinding">Apply chart config</button>
+        <button class="btn" type="button" id="btnResetChartStyle">Reset chart style</button>
+        <button class="btn btn--danger" type="button" id="btnClearBinding">Clear dataset binding</button>
+      </div>
+    `;
   }
 
   const preset = bindingPresetForType(component.type);
@@ -3505,6 +4732,184 @@ function renderBindingEditor(state, page, component) {
 
 function attachBindingEvents(root, page, component) {
   if (!BINDABLE_TYPES.has(component.type)) return;
+
+  if (component.type === "chart") {
+    const datasetSelect = root.querySelector("#bindDataset");
+    const familySelect = root.querySelector("#chartFamily");
+    const variantSelect = root.querySelector("#chartVariant");
+    const resolveColumns = (datasetId) => {
+      const state = store.getState();
+      return state.datasets.find((dataset) => dataset.id === datasetId)?.columns || [];
+    };
+    const setValue = (selector, value = "") => {
+      const node = root.querySelector(selector);
+      if (!node) return;
+      node.value = value == null ? "" : String(value);
+    };
+    const numOrNull = (selector) => {
+      const value = root.querySelector(selector)?.value;
+      if (value == null || value === "") return null;
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? numeric : null;
+    };
+    const setColumnSelectOptions = (selector, columns, selectedValue = "", blankLabel = "Optional") => {
+      const node = root.querySelector(selector);
+      if (!node) return;
+      node.innerHTML = `
+        <option value="">${blankLabel}</option>
+        ${columns.map((column) => `<option value="${escapeHtml(column.key)}" ${selectedValue === column.key ? "selected" : ""}>${escapeHtml(column.key)}</option>`).join("")}
+      `;
+      node.value = selectedValue || "";
+    };
+
+    function repopulateVariants() {
+      if (!familySelect || !variantSelect) return;
+      const family = familySelect.value || "line";
+      const variants = chartVariantsForFamily(family);
+      if (!variants.length) return;
+      const current = variantSelect.value;
+      variantSelect.innerHTML = variants
+        .map((variant) => `<option value="${variant.id}" ${variant.id === current ? "selected" : ""}>${escapeHtml(variant.label)}</option>`)
+        .join("");
+      if (!variants.some((variant) => variant.id === current)) {
+        variantSelect.value = variants[0].id;
+      }
+    }
+
+    function applyRoleAutofillPreview() {
+      const datasetId = datasetSelect?.value || "";
+      const variantId = variantSelect?.value || component.props?.chart?.variant || "line_single";
+      const columns = resolveColumns(datasetId);
+      const binding = buildBinding("chart", {
+        datasetId,
+        variantId,
+        columns,
+      });
+      const mapping = binding?.mapping || {};
+      const y = Array.isArray(mapping.y) ? mapping.y : [];
+      setColumnSelectOptions("#bindXCol", columns, mapping.x || "", "Select x column");
+      setColumnSelectOptions("#bindYCol", columns, y[0] || "", "Select y column");
+      setColumnSelectOptions("#bindYCol2", columns, y[1] || "", "Optional");
+      setColumnSelectOptions("#bindY2Col", columns, mapping.y2 || "", "Optional");
+      setColumnSelectOptions("#bindSeriesCol", columns, mapping.series || "", "Optional");
+      setColumnSelectOptions("#bindSizeCol", columns, mapping.size || "", "Optional");
+      setColumnSelectOptions("#bindColorCol", columns, mapping.color || "", "Optional");
+      setColumnSelectOptions("#bindTargetCol", columns, mapping.target || "", "Optional");
+      setColumnSelectOptions("#bindLabelCol", columns, mapping.label || "", "Optional");
+      setValue("#bindAgg", binding?.transforms?.aggregation || "sum");
+      setValue("#bindSortBy", binding?.transforms?.sortBy || "x");
+      setValue("#bindSortDir", binding?.transforms?.sortDir || "asc");
+      setValue("#bindTopN", binding?.transforms?.topN || "");
+      setValue("#bindStackMode", binding?.transforms?.stackMode || "none");
+    }
+
+    familySelect?.addEventListener("change", () => {
+      repopulateVariants();
+      applyRoleAutofillPreview();
+    });
+    variantSelect?.addEventListener("change", () => {
+      applyRoleAutofillPreview();
+    });
+    datasetSelect?.addEventListener("change", () => {
+      applyRoleAutofillPreview();
+    });
+    applyRoleAutofillPreview();
+
+    root.querySelector("#btnApplyBinding")?.addEventListener("click", () => {
+      const datasetId = datasetSelect?.value || "";
+      const variantId = variantSelect?.value || component.props?.chart?.variant || "line_single";
+      const columns = resolveColumns(datasetId);
+      const nextVariant = chartVariantById(variantId);
+      const paletteOverride = parsePaletteOverrideInput(root.querySelector("#chartPalette")?.value || "");
+      const mapping = {
+        x: root.querySelector("#bindXCol")?.value || "",
+        y: [root.querySelector("#bindYCol")?.value || "", root.querySelector("#bindYCol2")?.value || ""].filter(Boolean),
+        y2: root.querySelector("#bindY2Col")?.value || "",
+        series: root.querySelector("#bindSeriesCol")?.value || "",
+        size: root.querySelector("#bindSizeCol")?.value || "",
+        color: root.querySelector("#bindColorCol")?.value || "",
+        target: root.querySelector("#bindTargetCol")?.value || "",
+        label: root.querySelector("#bindLabelCol")?.value || "",
+      };
+      const transforms = {
+        aggregation: root.querySelector("#bindAgg")?.value || "sum",
+        sortBy: root.querySelector("#bindSortBy")?.value || "x",
+        sortDir: root.querySelector("#bindSortDir")?.value || "asc",
+        topN: root.querySelector("#bindTopN")?.value || "",
+        stackMode: root.querySelector("#bindStackMode")?.value || "none",
+      };
+      const binding = buildBinding("chart", {
+        datasetId,
+        variantId,
+        columns,
+        mapping,
+        transforms,
+      });
+
+      const chart = component.props?.chart || {};
+      const nextChart = {
+        ...chart,
+        family: nextVariant.family,
+        variant: nextVariant.id,
+        visual: {
+          ...(chart.visual || {}),
+          showLegend: (root.querySelector("#chartShowLegend")?.value || "true") === "true",
+          showLabels: (root.querySelector("#chartShowLabels")?.value || "false") === "true",
+          smooth: (root.querySelector("#chartSmooth")?.value || "false") === "true",
+          step: (root.querySelector("#chartStep")?.value || "false") === "true",
+          useBrandDefaults: (root.querySelector("#chartUseBrandDefaults")?.value || "true") === "true",
+          palette: paletteOverride.join(","),
+          paletteOverride,
+        },
+        axis: {
+          ...(chart.axis || {}),
+          xType: root.querySelector("#chartAxisXType")?.value || "auto",
+          dateMode: root.querySelector("#chartDateMode")?.value || "auto",
+          yMin: numOrNull("#chartYMin"),
+          yMax: numOrNull("#chartYMax"),
+          y2Min: numOrNull("#chartY2Min"),
+          y2Max: numOrNull("#chartY2Max"),
+        },
+        format: {
+          ...(chart.format || {}),
+          decimals: numOrNull("#chartDecimals"),
+          prefix: root.querySelector("#chartPrefix")?.value || "",
+          suffix: root.querySelector("#chartSuffix")?.value || "",
+        },
+      };
+
+      updateComponent(page.id, component.id, {
+        props: {
+          ...(component.props || {}),
+          chart: nextChart,
+        },
+        dataBindings: datasetId ? [binding] : [],
+      }, "bind-dataset");
+      showToast("Chart config applied");
+    });
+
+    root.querySelector("#btnResetChartStyle")?.addEventListener("click", () => {
+      const chartModel = component.props?.chart || {};
+      if (!chartStyleNeedsReset(chartModel)) {
+        showToast("Chart style already uses brand defaults");
+        return;
+      }
+      updateComponent(page.id, component.id, {
+        props: {
+          ...(component.props || {}),
+          chart: resetChartStyleModel(chartModel),
+        },
+      }, "reset-chart-style");
+      showToast("Chart style reset to brand defaults");
+    });
+
+    root.querySelector("#btnClearBinding")?.addEventListener("click", () => {
+      updateComponent(page.id, component.id, { dataBindings: [] }, "clear-binding");
+      showToast("Dataset binding removed");
+    });
+
+    return;
+  }
 
   root.querySelector("#btnApplyBinding")?.addEventListener("click", () => {
     const datasetId = root.querySelector("#bindDataset")?.value || "";
@@ -3756,6 +5161,15 @@ function renderPropsEditor(component) {
 }
 
 function attachPropEditorEvents(root, page, component) {
+  let propPreviewSession = null;
+  let propPreviewFrameId = null;
+  let propPreviewPending = null;
+
+  function clonePreviewValue(value) {
+    if (value && typeof value === "object") return deepClone(value);
+    return value;
+  }
+
   function readFieldValue(field) {
     const valueType = field.dataset.propType;
     if (valueType === "number") {
@@ -3776,15 +5190,103 @@ function attachPropEditorEvents(root, page, component) {
     });
   }
 
-  function updatePropPath(path, nextValue, historyLabel = "props-controls") {
+  function writePropPathInDraft(draft, path, nextValue) {
+    const targetPage = findPage(draft, page.id);
+    const targetComponent = findComponent(targetPage, component.id);
+    if (!targetComponent) return false;
+    if (!targetComponent.props || typeof targetComponent.props !== "object") {
+      targetComponent.props = {};
+    }
+    const currentValue = getByPath(targetComponent.props, path);
+    if (Object.is(currentValue, nextValue)) return false;
+    setByPath(targetComponent.props, path, nextValue);
+    return true;
+  }
+
+  function ensurePropPreviewSession(path) {
     const state = store.getState();
     const targetPage = findPage(state, page.id);
     const targetComponent = findComponent(targetPage, component.id);
-    if (!targetComponent) return;
+    if (!targetComponent || !targetComponent.props || typeof targetComponent.props !== "object") {
+      return false;
+    }
+    if (
+      propPreviewSession &&
+      propPreviewSession.pageId === page.id &&
+      propPreviewSession.componentId === component.id &&
+      propPreviewSession.path === path
+    ) {
+      return true;
+    }
+    propPreviewSession = {
+      pageId: page.id,
+      componentId: component.id,
+      path,
+      baseline: clonePreviewValue(getByPath(targetComponent.props, path)),
+    };
+    return true;
+  }
 
-    const nextProps = deepClone(targetComponent.props || {});
-    setByPath(nextProps, path, nextValue);
-    updateComponent(page.id, component.id, { props: nextProps }, historyLabel);
+  function queuePropPreview(path, nextValue) {
+    if (!ensurePropPreviewSession(path)) return;
+    propPreviewPending = { path, value: nextValue };
+    if (propPreviewFrameId != null) return;
+    propPreviewFrameId = window.requestAnimationFrame(() => {
+      propPreviewFrameId = null;
+      if (!propPreviewPending) return;
+      const pending = propPreviewPending;
+      propPreviewPending = null;
+      store.commit((draft) => {
+        writePropPathInDraft(draft, pending.path, pending.value);
+      }, { historyLabel: "props-controls-preview", skipHistory: true });
+    });
+  }
+
+  function commitPropPath(path, nextValue, historyLabel = "props-controls") {
+    if (propPreviewFrameId != null) {
+      window.cancelAnimationFrame(propPreviewFrameId);
+      propPreviewFrameId = null;
+    }
+    propPreviewPending = null;
+
+    const state = store.getState();
+    const targetPage = findPage(state, page.id);
+    const targetComponent = findComponent(targetPage, component.id);
+    if (!targetComponent || !targetComponent.props || typeof targetComponent.props !== "object") {
+      propPreviewSession = null;
+      return;
+    }
+
+    const currentValue = getByPath(targetComponent.props, path);
+    const hasSession = Boolean(
+      propPreviewSession &&
+      propPreviewSession.pageId === page.id &&
+      propPreviewSession.componentId === component.id &&
+      propPreviewSession.path === path,
+    );
+
+    if (hasSession) {
+      const baseline = propPreviewSession.baseline;
+      if (!Object.is(currentValue, baseline)) {
+        store.commit((draft) => {
+          writePropPathInDraft(draft, path, baseline);
+        }, { historyLabel: "props-controls-preview", skipHistory: true });
+      }
+      if (!Object.is(baseline, nextValue)) {
+        store.commit((draft) => {
+          writePropPathInDraft(draft, path, nextValue);
+        }, { historyLabel });
+        scheduleDebouncedAutoReflow(`component:${historyLabel}`);
+      }
+      propPreviewSession = null;
+      return;
+    }
+
+    if (Object.is(currentValue, nextValue)) return;
+    store.commit((draft) => {
+      writePropPathInDraft(draft, path, nextValue);
+    }, { historyLabel });
+    scheduleDebouncedAutoReflow(`component:${historyLabel}`);
   }
 
   root.querySelectorAll("[data-prop-path]").forEach((field) => {
@@ -3796,12 +5298,25 @@ function attachPropEditorEvents(root, page, component) {
       if (field.dataset.propType === "number") {
         syncTwinFields(field, nextValue);
       }
-      updatePropPath(path, nextValue, "props-controls");
+      commitPropPath(path, nextValue, "props-controls");
+    };
+
+    const preview = () => {
+      const nextValue = readFieldValue(field);
+      syncTwinFields(field, nextValue);
+      queuePropPreview(path, nextValue);
     };
 
     field.addEventListener("change", commit);
     if (field.dataset.propType === "number") {
-      field.addEventListener("input", commit);
+      if (field.type === "range") {
+        field.addEventListener("input", preview);
+      } else {
+        field.addEventListener("input", () => {
+          const nextValue = readFieldValue(field);
+          syncTwinFields(field, nextValue);
+        });
+      }
     }
   });
 
@@ -3851,79 +5366,112 @@ function renderInspectorSettingsTab(state) {
 
   const layout = getComponentLayout(component, state.project.printProfile);
   const isLocked = Boolean(component.layoutConstraints?.locked);
+  const controlsDefaultOpen = component.type !== "chart";
+  const basicOpen = readInspectorSettingsSectionOpen("basic", true);
+  const controlsOpen = readInspectorSettingsSectionOpen("controls", controlsDefaultOpen);
+  const layoutOpen = readInspectorSettingsSectionOpen("layout", false);
+  const advancedOpen = readInspectorSettingsSectionOpen("advanced", false);
   root.innerHTML = `
-    <div class="form-group">
-      <label>Selected Page</label>
-      <div class="helper">${escapeHtml(page.title || `Page`)}</div>
-    </div>
-    <div class="form-group">
-      <label>Selected Component</label>
-      <div class="helper">${escapeHtml(componentTypeLabel(component.type))}</div>
-    </div>
-    <div class="form-group">
-      <label>Lock</label>
-      <button class="btn" type="button" id="btnToggleComponentLockInspector">${isLocked ? "Unlock component" : "Lock component"}</button>
-      <div class="helper">${isLocked ? "Component is locked. Unlock to drag or resize." : "Component is unlocked and editable."}</div>
-    </div>
-    <div class="form-grid">
-      <div class="form-group"><label>Title</label><input class="form-input" id="componentTitle" value="${escapeHtml(component.title || "")}"></div>
-      <div class="form-group">
-        <label>Status</label>
-        <select class="form-select" id="componentStatus">
-          <option value="" ${!component.status ? "selected" : ""}>None</option>
-          <option value="low" ${component.status === "low" ? "selected" : ""}>Low</option>
-          <option value="medium" ${component.status === "medium" ? "selected" : ""}>Medium</option>
-          <option value="high" ${component.status === "high" ? "selected" : ""}>High</option>
-        </select>
+    <div class="inspector-summary-card">
+      <div class="inspector-summary-grid">
+        <div class="inspector-summary-item">
+          <label>Page</label>
+          <div>${escapeHtml(page.title || "Page")}</div>
+        </div>
+        <div class="inspector-summary-item">
+          <label>Component</label>
+          <div>${escapeHtml(componentTypeLabel(component.type))}</div>
+        </div>
+      </div>
+      <div class="inspector-summary-lock">
+        <button class="btn" type="button" id="btnToggleComponentLockInspector">${isLocked ? "Unlock" : "Lock"}</button>
+        <div class="helper">${isLocked ? "Locked: drag/resize disabled." : "Unlocked: drag/resize enabled."}</div>
       </div>
     </div>
-    <div class="form-group">
-      <label>Body</label>
-      <textarea class="form-textarea" id="componentBody">${escapeHtml(component.body || "")}</textarea>
-    </div>
-    <div class="form-group">
-      <label>Component Controls</label>
-      ${renderPropsEditor(component)}
-    </div>
-    <details class="advanced-json">
-      <summary>Advanced Props (JSON)</summary>
-      <div class="form-group" style="margin-top:8px;">
-        <textarea class="form-textarea" id="componentProps">${escapeHtml(JSON.stringify(component.props || {}, null, 2))}</textarea>
-      </div>
-      <div class="helper">Use this for advanced or bulk edits when needed.</div>
-    </details>
-    <div class="form-group">
-      <button class="btn" type="button" id="btnFitComponent">Auto-fit Component Height</button>
-    </div>
-    ${
-      component.type === "cover_hero"
-        ? `
+
+    <details class="inspector-section" data-inspector-section="basic" ${basicOpen ? "open" : ""}>
+      <summary>Basic</summary>
+      <div class="inspector-section-body">
+        <div class="form-grid">
+          <div class="form-group"><label>Title</label><input class="form-input" id="componentTitle" value="${escapeHtml(component.title || "")}"></div>
           <div class="form-group">
-            <label>Cover Image Asset</label>
-            <select class="form-select" id="coverAssetSelect">
-              <option value="">Use URL in props</option>
-              ${state.assets
-                .filter((asset) => asset.type === "image")
-                .map(
-                  (asset) =>
-                    `<option value="${asset.id}" ${
-                      component.props?.imageAssetId === asset.id ? "selected" : ""
-                    }>${escapeHtml(asset.filename)}</option>`,
-                )
-                .join("")}
+            <label>Status</label>
+            <select class="form-select" id="componentStatus">
+              <option value="" ${!component.status ? "selected" : ""}>None</option>
+              <option value="low" ${component.status === "low" ? "selected" : ""}>Low</option>
+              <option value="medium" ${component.status === "medium" ? "selected" : ""}>Medium</option>
+              <option value="high" ${component.status === "high" ? "selected" : ""}>High</option>
             </select>
-            <div class="helper">Import an image from the Settings drawer, then select it here.</div>
           </div>
-        `
-        : ""
-    }
-    <div class="form-grid">
-      <div class="form-group"><label>Column Start</label><input class="form-input" id="layoutColStart" type="number" min="1" max="24" value="${layout.colStart}" ${isLocked ? "disabled" : ""}></div>
-      <div class="form-group"><label>Column Span</label><input class="form-input" id="layoutColSpan" type="number" min="1" max="24" value="${layout.colSpan}" ${isLocked ? "disabled" : ""}></div>
-      <div class="form-group"><label>Row Start</label><input class="form-input" id="layoutRowStart" type="number" min="1" max="800" value="${layout.rowStart}" ${isLocked ? "disabled" : ""}></div>
-      <div class="form-group"><label>Row Span</label><input class="form-input" id="layoutRowSpan" type="number" min="1" max="800" value="${layout.rowSpan}" ${isLocked ? "disabled" : ""}></div>
-    </div>
+        </div>
+        <div class="form-group">
+          <label>Body</label>
+          <textarea class="form-textarea" id="componentBody">${escapeHtml(component.body || "")}</textarea>
+        </div>
+      </div>
+    </details>
+
+    <details class="inspector-section" data-inspector-section="controls" ${controlsOpen ? "open" : ""}>
+      <summary>Component Controls</summary>
+      <div class="inspector-section-body">
+        ${renderPropsEditor(component)}
+        ${
+          component.type === "cover_hero"
+            ? `
+              <div class="form-group">
+                <label>Cover Image Asset</label>
+                <select class="form-select" id="coverAssetSelect">
+                  <option value="">Use URL in props</option>
+                  ${state.assets
+                    .filter((asset) => asset.type === "image")
+                    .map(
+                      (asset) =>
+                        `<option value="${asset.id}" ${
+                          component.props?.imageAssetId === asset.id ? "selected" : ""
+                        }>${escapeHtml(asset.filename)}</option>`,
+                    )
+                    .join("")}
+                </select>
+                <div class="helper">Import an image from the Settings drawer, then select it here.</div>
+              </div>
+              <div class="form-group">
+                <label>Headline Vertical Offset</label>
+                <input class="form-input" id="coverContentOffsetY" type="number" min="-260" max="260" step="1" value="${escapeHtml(String(toNumber(component.props?.contentOffsetY, 0)))}">
+                <input class="form-range" id="coverContentOffsetYRange" type="range" min="-260" max="260" step="1" value="${escapeHtml(String(toNumber(component.props?.contentOffsetY, 0)))}">
+                <div class="helper">Move the cover headline block up/down to avoid clipping.</div>
+              </div>
+            `
+            : ""
+        }
+      </div>
+    </details>
+
+    <details class="inspector-section" data-inspector-section="layout" ${layoutOpen ? "open" : ""}>
+      <summary>Layout & Sizing</summary>
+      <div class="inspector-section-body">
+        <div class="form-group">
+          <button class="btn" type="button" id="btnFitComponent">Auto-fit Component Height</button>
+        </div>
+        <div class="form-grid">
+          <div class="form-group"><label>Column Start</label><input class="form-input" id="layoutColStart" type="number" min="1" max="24" value="${layout.colStart}" ${isLocked ? "disabled" : ""}></div>
+          <div class="form-group"><label>Column Span</label><input class="form-input" id="layoutColSpan" type="number" min="1" max="24" value="${layout.colSpan}" ${isLocked ? "disabled" : ""}></div>
+          <div class="form-group"><label>Row Start</label><input class="form-input" id="layoutRowStart" type="number" min="1" max="800" value="${layout.rowStart}" ${isLocked ? "disabled" : ""}></div>
+          <div class="form-group"><label>Row Span</label><input class="form-input" id="layoutRowSpan" type="number" min="1" max="800" value="${layout.rowSpan}" ${isLocked ? "disabled" : ""}></div>
+        </div>
+      </div>
+    </details>
+
+    <details class="inspector-section advanced-json" data-inspector-section="advanced" ${advancedOpen ? "open" : ""}>
+      <summary>Advanced Props (JSON)</summary>
+      <div class="inspector-section-body">
+        <div class="form-group">
+          <textarea class="form-textarea" id="componentProps">${escapeHtml(JSON.stringify(component.props || {}, null, 2))}</textarea>
+          <div class="helper">Use this for advanced or bulk edits when needed.</div>
+          </div>
+      </div>
+    </details>
   `;
+  bindInspectorSettingsSectionToggles(root);
 
   root.querySelector("#btnToggleComponentLockInspector")?.addEventListener("click", () => {
     toggleComponentLock(page.id, component.id);
@@ -3969,6 +5517,55 @@ function renderInspectorSettingsTab(state) {
       nextProps.imageUrl = asset.dataUrl;
     }
     updateComponent(page.id, component.id, { props: nextProps }, "cover-asset");
+  });
+
+  function setCoverContentOffset(value, { commit = false } = {}) {
+    const nextOffset = Math.max(-260, Math.min(260, Math.round(toNumber(value, 0))));
+    const numeric = root.querySelector("#coverContentOffsetY");
+    const range = root.querySelector("#coverContentOffsetYRange");
+    if (numeric) numeric.value = String(nextOffset);
+    if (range) range.value = String(nextOffset);
+
+    if (commit) {
+      const snapshot = store.getState();
+      const targetPage = findPage(snapshot, page.id);
+      const targetComponent = findComponent(targetPage, component.id);
+      if (!targetComponent) return;
+      const currentOffset = Math.round(toNumber(targetComponent.props?.contentOffsetY, 0));
+      if (currentOffset === nextOffset) return;
+      updateComponent(page.id, component.id, {
+        props: {
+          ...(targetComponent.props || {}),
+          contentOffsetY: nextOffset,
+        },
+      }, "cover-content-offset");
+      return;
+    }
+
+    store.commit((draft) => {
+      const targetPage = findPage(draft, page.id);
+      const targetComponent = findComponent(targetPage, component.id);
+      if (!targetComponent) return;
+      const currentOffset = Math.round(toNumber(targetComponent.props?.contentOffsetY, 0));
+      if (currentOffset === nextOffset) return;
+      targetComponent.props = {
+        ...(targetComponent.props || {}),
+        contentOffsetY: nextOffset,
+      };
+    }, { historyLabel: "cover-content-offset-preview", skipHistory: true });
+  }
+
+  root.querySelector("#coverContentOffsetY")?.addEventListener("input", (event) => {
+    setCoverContentOffset(event.target.value, { commit: false });
+  });
+  root.querySelector("#coverContentOffsetYRange")?.addEventListener("input", (event) => {
+    setCoverContentOffset(event.target.value, { commit: false });
+  });
+  root.querySelector("#coverContentOffsetY")?.addEventListener("change", (event) => {
+    setCoverContentOffset(event.target.value, { commit: true });
+  });
+  root.querySelector("#coverContentOffsetYRange")?.addEventListener("change", (event) => {
+    setCoverContentOffset(event.target.value, { commit: true });
   });
 
   root.querySelector("#btnFitComponent")?.addEventListener("click", () => {
@@ -4248,6 +5845,8 @@ const PALETTE_ONLY_ACTIONS = new Set([
   "ui-page-search",
   "ui-palette-search",
   "ui-palette-filter",
+  "ui-chart-search",
+  "ui-chart-family",
   "ui-workbench-tool",
 ]);
 
@@ -4262,6 +5861,7 @@ const PAGE_ONLY_ACTIONS = new Set([
   "topbar-surface-preview",
   "inspector-title-preview",
   "inspector-body-preview",
+  "props-controls-preview",
 ]);
 
 const SHELL_ONLY_ACTIONS = new Set([
@@ -4646,6 +6246,7 @@ function exportProjectBundle() {
 
 refs.btnExport.addEventListener("click", exportProjectBundle);
 refs.btnTopbarExport?.addEventListener("click", exportProjectBundle);
+refs.btnTopbarPurge?.addEventListener("click", purgeAllAndResetDefaults);
 refs.btnTopbarAutoFit?.addEventListener("click", () => {
   requestAutoFit({ trigger: "explicit", reason: "topbar-auto-fit" });
 });
@@ -4669,6 +6270,8 @@ refs.btnImport.addEventListener("change", async (event) => {
   store.replace(hydrated.value, { skipHistory: true });
   store.commit((draft) => {
     ensureTargetGridDensity(draft);
+    normalizeUiSelectionInDraft(draft);
+    draft.ui.pendingDeleteComponentId = null;
   }, { skipHistory: true });
   store.clearHistory();
   showToast("Project imported");
@@ -4676,27 +6279,7 @@ refs.btnImport.addEventListener("change", async (event) => {
   event.target.value = "";
 });
 
-refs.btnReset.addEventListener("click", async () => {
-  const proceed = await requestDecision({
-    title: "Reset sample pack",
-    message: "Reset to the sample template pack? This replaces current pages and clears imported datasets/assets.",
-    confirmLabel: "Reset",
-    cancelLabel: "Keep current",
-    tone: "danger",
-  });
-  if (!proceed) return;
-  store.commit((draft) => {
-    draft.pages = createInitialPages();
-    ensureTargetGridDensity(draft, { force: true });
-    draft.datasets = [];
-    draft.assets = [];
-    draft.ui.selectedPageId = draft.pages[0]?.id || null;
-    draft.ui.selectedComponentId = null;
-    draft.ui.activePageId = draft.pages[0]?.id || null;
-  }, { historyLabel: "reset" });
-  showToast("Sample pages restored");
-  requestAutoFit({ trigger: "reset", reason: "reset" });
-});
+refs.btnReset.addEventListener("click", resetSamplePack);
 
 refs.btnCustomPage?.addEventListener("click", () => addCustomPage());
 
@@ -4816,6 +6399,38 @@ window.addEventListener("keydown", (event) => {
   if (!typingTarget && modifier && ((event.key.toLowerCase() === "z" && event.shiftKey) || event.key.toLowerCase() === "y")) {
     event.preventDefault();
     store.redo();
+  }
+
+  if (!typingTarget && modifier && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "c") {
+    if (copySelectedComponentToClipboard()) {
+      event.preventDefault();
+    }
+    return;
+  }
+
+  if (!typingTarget && modifier && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "v") {
+    if (pasteComponentFromClipboard()) {
+      event.preventDefault();
+    }
+    return;
+  }
+
+  if (!typingTarget && !modifier && event.altKey && !event.shiftKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+    if (String(store.getState().ui?.pageSearch || "").trim()) {
+      return;
+    }
+    const target = event.target;
+    const row = target instanceof Element ? target.closest("[data-page-row]") : null;
+    const pageId = row instanceof HTMLElement ? row.dataset.pageId : null;
+    if (pageId) {
+      event.preventDefault();
+      const direction = event.key === "ArrowUp" ? -1 : 1;
+      const moved = movePage(pageId, direction, { announce: true });
+      if (moved) {
+        focusPageDragHandle(pageId);
+      }
+      return;
+    }
   }
 
   if ((event.key === "Delete" || event.key === "Backspace") && !modifier && !event.altKey && !event.shiftKey) {

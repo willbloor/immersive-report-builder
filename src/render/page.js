@@ -440,11 +440,18 @@ function createComponentNode({
           }
           break;
         case "open-inspector":
-          handlers.openComponentEditor(page.id, component.id, "settings");
+          if (typeof handlers.toggleComponentEditor === "function") {
+            handlers.toggleComponentEditor(page.id, component.id, "settings");
+          } else {
+            handlers.openComponentEditor(page.id, component.id, "settings");
+          }
           break;
         case "reset-component":
           if (component.layoutConstraints?.locked) return;
           handlers.resetComponentToDefault(page.id, component.id);
+          break;
+        case "duplicate-component":
+          handlers.duplicateComponent(page.id, component.id);
           break;
         case "toggle-lock":
           handlers.toggleComponentLock(page.id, component.id);
@@ -586,7 +593,7 @@ export function renderPageNode({
 
     if (data.kind === "new-component") {
       event.preventDefault();
-      handlers.addComponent(page.id, data.componentType, raw);
+      handlers.addComponent(page.id, data.componentType, raw, data.componentOptions || {});
       return;
     }
 

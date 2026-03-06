@@ -35,9 +35,55 @@ Safety backup:
 
 - /Users/will.bloor/Documents/Configurator-doc-builder was kept as a recovery backup while this split was set up
 
+## Multi-Chat Coordination (Required)
+
+When multiple chats are active, coordination is mandatory.
+
+1. Read `WORKSTREAMS.md` before making any code changes.
+2. Claim a workstream row and add file locks before editing.
+3. Update your row status/locks as work changes.
+4. Add a handoff line when done, then clear locks.
+5. Only control owner (`WS-00`) runs release flow (`Go` / `scripts/go-release.sh`).
+6. With each meaningful feature/change, update both `README.md` and `WORKSTREAMS.md` in the same workstream pass.
+
+Source of truth:
+
+- `/Users/will.bloor/Documents/app-builder/WORKSTREAMS.md`
+
 ## Current Status (March 5, 2026)
 
 This README reflects the current handoff status for moving this code into a new repository.
+
+## Latest Updates (March 6, 2026)
+
+- Unified chart model work is active under CH (Charts), with ECharts as the runtime engine.
+- Brand chart theme is centralized in `src/render/chart-theme.js` and applied through runtime normalization in `src/render/chart-runtime.js`.
+- Figma-referenced chart style profiles are wired for:
+  - horizontal/stacked bar baseline
+  - line baseline
+  - offset donut baseline
+  - column+line combo baseline
+  - radar baseline
+- Remaining chart families now normalize against the same token-driven style contract (typography/axis/legend/palette behavior), while keeping type-specific geometry.
+- Variant style profile assignment lives in `src/data/chart-registry.js`.
+- New inserted charts now use seed data that clearly differentiates stacked vs clustered behaviors by default.
+- `useBrandDefaults` remains the default path; local per-chart visual overrides are still supported.
+
+### UX + Editor Updates (March 6, 2026, 15:52 UTC)
+
+- Pages drawer now supports Kanban-style drag reorder with live displacement and slot placeholder feedback.
+- Pages row actions were updated to compact icon controls and improved drag affordance.
+- Component toolbar now includes icon `Duplicate`, trash-can delete, and true `INS` toggle behavior.
+- Component keyboard shortcuts added:
+  - `Cmd/Ctrl + C` copies selected component
+  - `Cmd/Ctrl + V` pastes copied component (unlocked, offset) onto active page
+- Topbar swatches now reflect rendered selected component colors/surface state more reliably.
+- Inspector was compacted into grouped/collapsible sections (`Basic`, `Component Controls`, `Layout & Sizing`, `Advanced Props`).
+- Inspector accordion state is now preserved while editing controls, so sections no longer collapse on each input change.
+- New topbar `Purge` action resets project to factory defaults (default templates only) and clears persisted local state keys.
+- Cover/headline cropping was reduced with updated hero typography constraints and responsive sizing.
+- Cover hero now supports inspector-controlled vertical headline offset (`contentOffsetY`) for manual headline repositioning.
+- Default all-caps page headline slot contract was relaxed (not force-locked), so headline blocks can be moved.
 
 ### Implemented
 
@@ -108,6 +154,46 @@ npx --yes vercel deploy --prod
 
 The included `vercel.json` rewrites both `/` and `/Index.html` to `/index.html` so casing differences do not break deploys on case-sensitive hosts.
 
+### Stable `Go` Release Runbook
+
+This repository supports a deterministic production release flow for app-builder only.
+Before release, ensure `WORKSTREAMS.md` shows no conflicting active locks and `Ready for release: YES`.
+
+- Chat trigger contract: send exactly `Go` in a Codex thread rooted at `/Users/will.bloor/Documents/app-builder`.
+- Runner command:
+
+```bash
+bash /Users/will.bloor/Documents/app-builder/scripts/go-release.sh
+```
+
+- Optional flags:
+  - `--dry-run`
+  - `--url <prod-url>`
+  - `--timeout <seconds>` (default `300`)
+
+`go-release.sh` behavior:
+
+1. Safety guards:
+   - repo root must be `/Users/will.bloor/Documents/app-builder`
+   - `origin` must be `https://github.com/willbloor/immersive-report-builder.git`
+2. Preflight checks:
+   - current branch is `main`
+   - working tree is clean
+   - local `main` is not behind `origin/main`
+   - `vercel.json` is valid JSON
+   - `index.html` exists
+3. Deploy action:
+   - `git push origin main`
+4. Post-deploy validation:
+   - poll `https://immersive-report-builder.vercel.app/`
+   - poll `https://immersive-report-builder.vercel.app/Index.html`
+   - require `HTTP 200` for both (every 10s, up to timeout)
+5. Failure policy:
+   - stop immediately
+   - print exact failure plus rollback guide:
+     - redeploy previous Vercel deployment, or
+     - `git revert <sha>` and `git push origin main`
+
 ## Architecture Overview
 
 ### Runtime Libraries
@@ -150,7 +236,7 @@ The included `vercel.json` rewrites both `/` and `/Index.html` to `/index.html` 
 
 ### Delete
 
-- Toolbar delete is two-step (`Del` then `Confirm`).
+- Toolbar delete is two-step via trash icon (click once to arm, click again to confirm).
 - Keyboard `Delete`/`Backspace` deletes selected component directly.
 - Keyboard delete is ignored while typing in form fields/contenteditable.
 
@@ -162,6 +248,8 @@ The included `vercel.json` rewrites both `/` and `/Index.html` to `/index.html` 
 - Image assets are stored as data URLs.
 - Local persistence key:
   - `doc-builder.state.v0_2`
+- Legacy key cleared by purge flow:
+  - `il_report_builder_state_v0_1`
 - Schema version:
   - `0.2`
 - Runtime metadata may include:

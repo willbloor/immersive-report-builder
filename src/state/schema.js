@@ -68,6 +68,9 @@ export function makeEmptyState() {
       pendingDeleteComponentId: null,
       showGridAll: false,
       activePageId: null,
+      pageSettingsPageId: null,
+      pagePanelTab: "pages",
+      templateSearch: "",
       warnings: {},
       paletteOpen: true,
       inspectorOpen: false,
@@ -96,6 +99,9 @@ export function ensureUiState(state) {
       pendingDeleteComponentId: null,
       showGridAll: false,
       activePageId: null,
+      pageSettingsPageId: null,
+      pagePanelTab: "pages",
+      templateSearch: "",
       warnings: {},
       paletteOpen: true,
       inspectorOpen: false,
@@ -112,13 +118,22 @@ export function ensureUiState(state) {
   if (typeof state.ui.pendingDeleteComponentId !== "string") {
     state.ui.pendingDeleteComponentId = null;
   }
+  if (typeof state.ui.pageSettingsPageId !== "string") {
+    state.ui.pageSettingsPageId = null;
+  }
+  if (!["pages", "templates"].includes(state.ui.pagePanelTab)) {
+    state.ui.pagePanelTab = "pages";
+  }
+  if (typeof state.ui.templateSearch !== "string") {
+    state.ui.templateSearch = "";
+  }
   if (typeof state.ui.paletteOpen !== "boolean") {
     state.ui.paletteOpen = true;
   }
   if (typeof state.ui.inspectorOpen !== "boolean") {
     state.ui.inspectorOpen = false;
   }
-  if (!["pages", "design", "components", "resources", "styles"].includes(state.ui.workbenchTool)) {
+  if (!["pages", "design", "components", "charts", "resources", "styles"].includes(state.ui.workbenchTool)) {
     state.ui.workbenchTool = "pages";
   }
   if (!["settings", "data"].includes(state.ui.inspectorTab)) {
