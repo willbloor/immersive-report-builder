@@ -1,0 +1,119 @@
+@media print {
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  html,
+  body,
+  #pages {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  #app,
+  .app-shell,
+  .main-grid,
+  .panel,
+  .panel.canvas,
+  .panel.canvas .panel-body,
+  .canvas,
+  .pages {
+    display: block !important;
+    width: auto !important;
+    height: auto !important;
+    max-height: none !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    border: none !important;
+    box-shadow: none !important;
+    background: transparent !important;
+  }
+
+  .panel.canvas {
+    margin-left: 0 !important;
+  }
+
+  body {
+    background: #fff !important;
+  }
+
+  body * {
+    visibility: hidden !important;
+  }
+
+  #pages,
+  #pages * {
+    visibility: visible !important;
+  }
+
+  .no-print,
+  .topbar,
+  .palette,
+  .inspector,
+  .thumbnail-strip,
+  .grid-overlay,
+  .component-toolbar,
+  .component-bbox,
+  .component-bbox-handle,
+  .component-drop-ghost,
+  .component-live-badge,
+  .moveable-control-box,
+  .page-head {
+    display: none !important;
+  }
+
+  #pages {
+    display: block !important;
+    overflow: visible !important;
+    position: static !important;
+    gap: 0 !important;
+    padding: 0 !important;
+  }
+
+  .page {
+    display: block !important;
+    margin: 0 !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+    break-after: page;
+    page-break-after: always;
+  }
+
+  .page:last-child {
+    break-after: auto;
+    page-break-after: auto;
+  }
+
+  .page-sheet {
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+  }
+
+  .page-sheet::after {
+    display: none !important;
+  }
+
+  .canvas-component {
+    border-color: transparent !important;
+    box-shadow: none !important;
+    outline: none !important;
+  }
+
+  .canvas-component.has-overflow {
+    outline: none !important;
+  }
+
+  .panel-card,
+  .delta-card,
+  .recommendation-card,
+  .cover-hero,
+  .section-intro,
+  .response-pair,
+  .kpi-columns {
+    overflow: hidden !important;
+  }
+}

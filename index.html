@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Immersive Report Builder v0.2</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Chivo+Mono:wght@300;400;500;600&family=Geologica:wght@300;400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/moveable/dist/moveable.min.css" />
+    <link rel="stylesheet" href="./styles/tokens.css?v=20260305a" />
+    <link rel="stylesheet" href="./styles/builder.css?v=20260305p" />
+    <link rel="stylesheet" href="./styles/print.css?v=20260305h" />
+  </head>
+  <body>
+    <div id="app" class="app-shell inspector-closed">
+      <header class="topbar no-print">
+        <div class="topbar-row topbar-row--single">
+          <div class="topbar-context-slot">
+            <div class="topbar-control-group topbar-control-group--target" aria-label="Canvas actions">
+              <div class="topbar-control-row">
+                <button class="btn btn--icon btn--compact" id="btnUndo" type="button" title="Undo" aria-label="Undo">↶</button>
+                <button class="btn btn--icon btn--compact" id="btnRedo" type="button" title="Redo" aria-label="Redo">↷</button>
+                <button class="btn btn--icon btn--compact" id="btnToggleGrid" type="button" title="Toggle grid" aria-label="Toggle grid">▦</button>
+              </div>
+            </div>
+            <div class="topbar-group topbar-group--text" id="textTopbarControls" hidden aria-label="Text controls">
+              <div class="topbar-control-group topbar-control-group--type" id="topbarTypographyGroup">
+                <div class="topbar-control-row">
+                  <select class="topbar-select" id="topbarFontFamily" aria-label="Font family">
+                    <option value="geologica">Geologica</option>
+                    <option value="chivo_mono">Chivo Mono</option>
+                  </select>
+
+                  <div class="topbar-number" aria-label="Font size">
+                    <button class="topbar-step-btn" id="btnTopbarFontSizeDec" type="button" title="Decrease font size">-</button>
+                    <input class="topbar-input topbar-input--short" id="topbarFontSize" type="number" min="8" max="220" step="1" value="16" aria-label="Font size">
+                    <button class="topbar-step-btn" id="btnTopbarFontSizeInc" type="button" title="Increase font size">+</button>
+                  </div>
+
+                  <select class="topbar-select topbar-select--weight" id="topbarFontWeight" aria-label="Font weight">
+                    <option value="300">300</option>
+                    <option value="400">400</option>
+                    <option value="500">500</option>
+                    <option value="600">600</option>
+                    <option value="700">700</option>
+                  </select>
+
+                  <input class="topbar-color" id="topbarTextColor" type="color" value="#17181C" aria-label="Text color" title="Text color">
+
+                  <button class="btn btn--icon btn--compact topbar-toggle" id="btnTopbarBold" type="button" title="Bold" aria-label="Bold"><strong>B</strong></button>
+                  <button class="btn btn--icon btn--compact topbar-toggle" id="btnTopbarItalic" type="button" title="Italic" aria-label="Italic"><em>I</em></button>
+                  <button class="btn btn--icon btn--compact topbar-toggle" id="btnTopbarUnderline" type="button" title="Underline" aria-label="Underline"><u>U</u></button>
+
+                  <div class="topbar-segmented" role="group" aria-label="Text align">
+                    <button class="topbar-segment-btn topbar-segment-btn--icon" id="btnTopbarAlignLeft" data-text-align="left" type="button" title="Align left" aria-label="Align left"><span class="topbar-align-icon topbar-align-icon--left" aria-hidden="true"></span></button>
+                    <button class="topbar-segment-btn topbar-segment-btn--icon" id="btnTopbarAlignCenter" data-text-align="center" type="button" title="Align center" aria-label="Align center"><span class="topbar-align-icon topbar-align-icon--center" aria-hidden="true"></span></button>
+                    <button class="topbar-segment-btn topbar-segment-btn--icon" id="btnTopbarAlignRight" data-text-align="right" type="button" title="Align right" aria-label="Align right"><span class="topbar-align-icon topbar-align-icon--right" aria-hidden="true"></span></button>
+                  </div>
+                  <input class="topbar-input topbar-input--short" id="topbarLineHeight" type="number" min="0.8" max="3" step="0.05" aria-label="Line height" title="Line height">
+                  <input class="topbar-input topbar-input--short" id="topbarLetterSpacing" type="number" min="-8" max="20" step="0.1" aria-label="Letter spacing" title="Letter spacing">
+
+                  <div class="topbar-segmented" role="group" aria-label="Text case">
+                    <button class="topbar-segment-btn topbar-segment-btn--case" id="btnTopbarCaseNormal" type="button" title="Normal case" aria-label="Normal case">a</button>
+                    <button class="topbar-segment-btn topbar-segment-btn--case" id="btnTopbarCaseUpper" type="button" title="Uppercase" aria-label="Uppercase">A</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="topbar-control-group topbar-control-group--color" id="topbarSurfaceGroup">
+                <div class="topbar-control-row">
+                  <button class="topbar-none-swatch" id="btnTopbarBackgroundNone" type="button" title="No background" aria-label="No background"></button>
+                  <input class="topbar-color" id="topbarBackgroundColor" type="color" value="#ECEEF5" aria-label="Background color" title="Background color">
+                  <select class="topbar-select topbar-select--line" id="topbarKeyline" aria-label="Keyline style" title="Keyline style">
+                    <option value="none">No line</option>
+                    <option value="thin">Thin line</option>
+                    <option value="thick">Thick line</option>
+                  </select>
+                  <input class="topbar-color" id="topbarKeylineColor" type="color" value="#D7D7E7" aria-label="Line color" title="Line color">
+                </div>
+              </div>
+            </div>
+            <div class="topbar-context-hint" id="topbarContextHint">Select a component for typography and surface controls.</div>
+          </div>
+          <div class="topbar-group topbar-group--global" aria-label="Global actions">
+            <button class="btn topbar-action-btn topbar-action-btn--save" id="btnTopbarExport" type="button" title="Save project (JSON)" aria-label="Save project (JSON)">
+              <span class="topbar-action-btn__icon" aria-hidden="true">💾</span>
+              <span class="topbar-action-btn__label">Save</span>
+            </button>
+            <button class="btn topbar-action-btn" id="btnTopbarAutoFit" type="button" title="Auto-fit all pages" aria-label="Auto-fit all pages">
+              <span class="topbar-action-btn__icon" aria-hidden="true">↕</span>
+              <span class="topbar-action-btn__label">Auto-fit</span>
+            </button>
+            <button class="btn topbar-action-btn topbar-action-btn--print" id="btnPrint" type="button" title="Print / Save PDF" aria-label="Print / Save PDF">
+              <span class="topbar-action-btn__icon" aria-hidden="true">🖨</span>
+              <span class="topbar-action-btn__label">Print</span>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <div class="main-grid">
+        <aside class="panel palette no-print" aria-label="Workbench">
+          <div class="workbench-shell">
+            <nav class="workbench-rail" id="workbenchRail" aria-label="Workbench tools">
+              <button class="rail-btn" data-tool="pages" type="button" title="Pages">Pg</button>
+              <button class="rail-btn" data-tool="design" type="button" title="Design Elements">DE</button>
+              <button class="rail-btn" data-tool="components" type="button" title="Components">Cm</button>
+              <button class="rail-btn" data-tool="resources" type="button" title="Resources">Rs</button>
+              <button class="rail-btn" data-tool="styles" type="button" title="Styles">St</button>
+            </nav>
+            <section class="workbench-drawer">
+              <div class="panel-head">
+                <div class="panel-head-row">
+                  <h2 id="paletteTitle">Pages</h2>
+                  <button class="icon-btn" id="btnClosePalette" type="button" aria-label="Close workbench">Close</button>
+                </div>
+                <p id="paletteDescription">Build pages and components from the left tools.</p>
+              </div>
+              <div class="panel-body" id="palette"></div>
+            </section>
+          </div>
+        </aside>
+
+        <main class="panel canvas" aria-label="Canvas">
+          <div class="panel-body">
+            <div class="canvas-zoom no-print" aria-label="Canvas zoom controls">
+              <button class="mini-btn" id="btnCanvasZoomOut" type="button" title="Zoom out" aria-label="Zoom out">-</button>
+              <select class="canvas-zoom-select" id="selectCanvasZoom" aria-label="Canvas zoom">
+                <option value="fit">Fit</option>
+                <option value="0.5">50%</option>
+                <option value="0.67">67%</option>
+                <option value="0.75">75%</option>
+                <option value="0.9">90%</option>
+                <option value="1" selected>100%</option>
+                <option value="1.1">110%</option>
+                <option value="1.25">125%</option>
+                <option value="1.5">150%</option>
+              </select>
+              <button class="mini-btn mini-btn--fit" id="btnCanvasZoomFit" type="button" title="Fit to viewport" aria-label="Fit to viewport">Fit</button>
+              <button class="mini-btn" id="btnCanvasZoomIn" type="button" title="Zoom in" aria-label="Zoom in">+</button>
+            </div>
+            <div id="thumbnails" class="thumbnail-strip no-print"></div>
+            <div id="pages" class="pages">
+              <div class="boot-warning no-print">
+                Loading builder...
+              </div>
+            </div>
+          </div>
+        </main>
+
+        <aside class="panel inspector no-print" aria-label="Inspector">
+          <div class="panel-head">
+            <div class="panel-head-row">
+              <h2>Inspector</h2>
+              <button class="icon-btn" id="btnCloseInspector" type="button" aria-label="Close inspector">Close</button>
+            </div>
+            <p>Edit selected components and data bindings.</p>
+            <div class="inspector-tabs" id="inspectorTabs">
+              <button class="inspector-tab-btn" data-inspector-tab="settings" type="button">Component</button>
+              <button class="inspector-tab-btn" data-inspector-tab="data" type="button">Data</button>
+            </div>
+          </div>
+          <div class="panel-body" id="inspector"></div>
+        </aside>
+      </div>
+
+      <button class="settings-fab no-print" id="btnOpenSettingsDrawer" type="button" aria-label="Open settings" title="Settings">⚙</button>
+      <aside class="settings-drawer no-print" id="settingsDrawer" aria-label="Settings">
+        <div class="settings-head">
+          <h3>Settings</h3>
+          <button class="icon-btn" id="btnCloseSettingsDrawer" type="button" aria-label="Close settings">Close</button>
+        </div>
+        <div class="settings-body">
+          <div class="form-group">
+            <label for="selectPrintProfile">Profile</label>
+            <select id="selectPrintProfile" class="form-select"></select>
+          </div>
+
+          <div class="form-group">
+            <label>Margins (mm)</label>
+            <div class="form-grid">
+              <div class="form-group">
+                <label for="marginTopMm">Top</label>
+                <input class="form-input" id="marginTopMm" type="number" min="0" max="25" step="1" value="8">
+              </div>
+              <div class="form-group">
+                <label for="marginRightMm">Right</label>
+                <input class="form-input" id="marginRightMm" type="number" min="0" max="25" step="1" value="8">
+              </div>
+              <div class="form-group">
+                <label for="marginBottomMm">Bottom</label>
+                <input class="form-input" id="marginBottomMm" type="number" min="0" max="25" step="1" value="10">
+              </div>
+              <div class="form-group">
+                <label for="marginLeftMm">Left</label>
+                <input class="form-input" id="marginLeftMm" type="number" min="0" max="25" step="1" value="8">
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-actions">
+            <button class="btn" id="btnAddCustomPage" type="button">Add Custom Page</button>
+            <button class="btn" id="btnExport" type="button">Export JSON</button>
+            <button class="btn" id="btnImportProjectTrigger" type="button">Import JSON</button>
+            <button class="btn" id="btnImportDataTrigger" type="button">Import Data</button>
+            <button class="btn" id="btnImportImageTrigger" type="button">Import Image</button>
+            <button class="btn btn--danger" id="btnReset" type="button">Reset Sample Pack</button>
+          </div>
+
+          <input id="fileImportProject" type="file" accept="application/json" hidden />
+          <input id="fileImportCsv" type="file" accept=".csv,.json,text/csv,application/json" hidden />
+          <input id="fileImportAsset" type="file" accept="image/*" hidden />
+        </div>
+      </aside>
+    </div>
+
+    <div id="toast" class="toast" aria-live="polite"></div>
+    <div id="autoFitOverlay" class="auto-fit-overlay no-print" hidden aria-live="polite" aria-busy="true" aria-label="Auto-fit in progress">
+      <div class="auto-fit-card">
+        <div class="auto-fit-spinner" aria-hidden="true"></div>
+        <h3>Auto-fit in progress</h3>
+        <p id="autoFitPhase">Preparing auto-fit</p>
+        <p id="autoFitProfile"></p>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/moveable/dist/moveable.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+    <script type="module" src="./src/main.js?v=20260305u"></script>
+    <script>
+      (function () {
+        function escapeHtml(value) {
+          return String(value || "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+        }
+
+        var isFileProtocol = window.location.protocol === "file:";
+        window.setTimeout(function () {
+          if (document.body && document.body.dataset && document.body.dataset.appBooted === "1") {
+            return;
+          }
+          var pages = document.getElementById("pages");
+          if (!pages) return;
+          var serverHint = "Open DevTools Console to inspect the startup error.";
+          if (isFileProtocol) {
+            var filePath = decodeURIComponent(window.location.pathname || "");
+            if (/^\/[A-Za-z]:/.test(filePath)) filePath = filePath.slice(1);
+            var projectDir = filePath.replace(/\/[^/]*$/, "") || ".";
+            var command = 'cd "' + projectDir + '" && python3 -m http.server 4173';
+            serverHint = "<code>" + escapeHtml(command) + "</code> then open <code>http://localhost:4173/</code>.";
+          }
+          pages.innerHTML =
+            '<div class="boot-warning no-print"><strong>Builder failed to start.</strong><p>Most likely cause is opening the file directly with <code>file://</code> where module imports are blocked.</p><p>Run from a local web server: ' +
+            serverHint +
+            "</p></div>";
+        }, 1400);
+      })();
+    </script>
+  </body>
+</html>
