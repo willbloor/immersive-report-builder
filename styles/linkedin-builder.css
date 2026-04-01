@@ -773,16 +773,41 @@ button {
   background: rgba(10, 102, 194, 0.02);
 }
 
+.frame-element__selection--image {
+  border-width: 2px;
+  border-color: rgba(10, 102, 194, 0.46);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.78),
+    0 0 0 4px rgba(10, 102, 194, 0.12);
+  background: rgba(10, 102, 194, 0.03);
+}
+
+.frame-element__selection--image.is-passive {
+  background: rgba(10, 102, 194, 0.05);
+}
+
 .frame-element.is-selected .frame-element__selection {
   border: 2px solid var(--accent);
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.92);
   background: transparent;
 }
 
+.frame-element.is-selected .frame-element__selection--image {
+  border: 3px solid var(--accent);
+  box-shadow:
+    0 0 0 2px rgba(255, 255, 255, 0.94),
+    0 0 0 8px rgba(10, 102, 194, 0.16);
+  background: rgba(10, 102, 194, 0.04);
+}
+
 .resize-handles {
   position: absolute;
   inset: -14px;
   pointer-events: none;
+}
+
+.resize-handles--image {
+  inset: -20px;
 }
 
 .resize-handle {
@@ -793,6 +818,13 @@ button {
   background: var(--accent);
   box-shadow: 0 6px 16px rgba(10, 102, 194, 0.26);
   pointer-events: auto;
+}
+
+.resize-handles--image .resize-handle {
+  width: 40px;
+  height: 40px;
+  border-width: 4px;
+  box-shadow: 0 10px 22px rgba(10, 102, 194, 0.34);
 }
 
 .resize-handle--nw { left: 0; top: 0; cursor: nwse-resize; }

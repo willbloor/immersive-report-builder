@@ -2978,7 +2978,14 @@ function createElementNode(frame, element, state, { thumbnail = false, suppressS
     && !suppressSelection
     && state.ui.selectedFrameId === frame.id
     && state.ui.selectedElementId === element.id;
-  const imageBounds = null;
+  const imageBounds = element.type === "image"
+    ? {
+      x: 0,
+      y: 0,
+      w: Number(element.w) || 0,
+      h: Number(element.h) || 0,
+    }
+    : null;
   if (isSelected) {
     node.classList.add("is-selected");
   }
@@ -3059,12 +3066,16 @@ function createElementNode(frame, element, state, { thumbnail = false, suppressS
   if (!thumbnail && !suppressSelection && element.locked !== true) {
     const selection = document.createElement("div");
     selection.className = "frame-element__selection";
+    if (element.type === "image") {
+      selection.classList.add("frame-element__selection--image");
+    }
     if (imageBounds) {
       selection.style.inset = "auto";
-      selection.style.left = `${imageBounds.x - 7}px`;
-      selection.style.top = `${imageBounds.y - 7}px`;
-      selection.style.width = `${imageBounds.w + 14}px`;
-      selection.style.height = `${imageBounds.h + 14}px`;
+      const padding = element.type === "image" ? 14 : 7;
+      selection.style.left = `${imageBounds.x - padding}px`;
+      selection.style.top = `${imageBounds.y - padding}px`;
+      selection.style.width = `${imageBounds.w + (padding * 2)}px`;
+      selection.style.height = `${imageBounds.h + (padding * 2)}px`;
     }
     if (!isSelected) {
       selection.classList.add("is-passive");
@@ -3075,12 +3086,16 @@ function createElementNode(frame, element, state, { thumbnail = false, suppressS
   if (isSelected && !frame.layoutLocked && !thumbnail && !suppressSelection) {
     const handles = document.createElement("div");
     handles.className = "resize-handles";
+    if (element.type === "image") {
+      handles.classList.add("resize-handles--image");
+    }
     if (imageBounds) {
       handles.style.inset = "auto";
-      handles.style.left = `${imageBounds.x - 10}px`;
-      handles.style.top = `${imageBounds.y - 10}px`;
-      handles.style.width = `${imageBounds.w + 20}px`;
-      handles.style.height = `${imageBounds.h + 20}px`;
+      const padding = element.type === "image" ? 18 : 10;
+      handles.style.left = `${imageBounds.x - padding}px`;
+      handles.style.top = `${imageBounds.y - padding}px`;
+      handles.style.width = `${imageBounds.w + (padding * 2)}px`;
+      handles.style.height = `${imageBounds.h + (padding * 2)}px`;
     }
     ["nw", "ne", "sw", "se"].forEach((position) => handles.appendChild(createResizeHandle(position)));
     node.appendChild(handles);
