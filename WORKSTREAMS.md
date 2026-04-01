@@ -1,71 +1,60 @@
 # WORKSTREAMS (Command and Control)
 
-This is the source of truth for all parallel chats working in `/Users/will.bloor/Documents/app-builder`.
+This is the source of truth for chats working in `/Users/will.bloor/Documents/app-builder`.
 
-- Last updated (UTC): `2026-03-06T09:00:00Z`
+- Last updated (UTC): `2026-04-01T18:02:11Z`
 - Control owner: `WS-00`
 - Production URL: `https://immersive-report-builder.vercel.app/`
 - Release command: `bash /Users/will.bloor/Documents/app-builder/scripts/go-release.sh`
 
-## Non-Negotiable Rules (All Chats)
+## Current Product Direction
 
-1. Read this file and `README.md` before making any code changes.
-2. Claim a workstream row in `Active Workstreams` before editing files.
-3. Add explicit file locks in your row before editing (`Locked Files` column).
+- Default app at `/`: Immersive LinkedIn Builder
+- Default surface intent: front-door LinkedIn dashboard first, with compact top-right create actions and brand-home navigation, then a square-first LinkedIn editor with a global left rail, inline-first canvas editing, and a persistent right rail split between item/page controls, elements, and pages, with portrait-first Figma-driven media coverage variants available as template starts
+- Archived app at `/legacy.html`: report builder shell
+- Repo rule: do not modify `/Users/will.bloor/Documents/Configurator` from this repo thread
+
+## Non-Negotiable Rules
+
+1. Read `README.md` and this file before making code changes.
+2. Claim a workstream row before editing.
+3. Add explicit file locks for repo-tracked files you edit.
 4. Do not edit files locked by another active workstream.
-5. Update your row whenever status/scope/locks change.
-6. At handoff or completion, clear locks and add a note in `Handoffs`.
-7. Do not run production deploy from feature workstreams.
-8. Only `WS-00` can run release flow (`Go`/`go-release.sh`).
-9. No workstream may modify `/Users/will.bloor/Documents/Configurator` from this repo thread.
-10. Treat known parallel local changes as normal; only escalate when there is a file-lock collision or release-gate risk.
-11. `WORKSTREAMS.md` is a shared coordination file and must never be hard-locked; all active chats may update it for claim/status/handoff.
-12. Non-WS-00 chats may edit only their own row and add handoff entries; only WS-00 edits release readiness, merge queue, and decisions log.
-
-## Clear Plan of Action
-
-1. Intake and deconflict:
-   - New chat claims a workstream ID and file locks before editing.
-   - Control owner resolves lock conflicts and updates merge order.
-2. Build in parallel:
-   - Each stream uses a narrow scope and minimal file surface.
-   - Streams keep status current: `planned`, `in_progress`, `blocked`, `ready_for_merge`, `merged`, `closed`.
-3. Integrate safely:
-   - Merge queue is followed top-to-bottom.
-   - After each merge, update `Decisions Log` and `Current Deploy Readiness`.
-4. Release with gatekeeping:
-   - Control owner verifies no active conflicting streams.
-   - Run `bash scripts/go-release.sh --dry-run`.
-   - If dry-run passes and queue is clear, execute release (`Go` or script without `--dry-run`).
-5. Stabilize:
-   - Validate `/` and `/Index.html` in production.
-   - Capture release outcome and commit SHA in `Decisions Log`.
+5. Update both `README.md` and `WORKSTREAMS.md` in the same pass when changing default boot behavior or core product flow.
+6. Only `WS-00` runs release flow.
+7. `WORKSTREAMS.md` is never hard-locked; use it for coordination and handoff only.
 
 ## Current Deploy Readiness
 
 - Freeze: `OFF`
-- Ready for merge: `NO` (set `YES` only when merge queue is empty)
-- Ready for release: `NO` (set `YES` only after dry-run passes)
-- Last known good commit: `a402c66`
+- Ready for merge: `NO`
+- Ready for release: `NO`
+- Last known good commit: `74bfbb4`
 
 ## Active Workstreams
 
 | ID | Owner / Chat | Branch | Status | Goal | Locked Files | Depends On | Updated (UTC) |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| WS-00 | Command and control | `main` | `in_progress` | Coordinate streams, merge queue, and controlled release | `README.md`, `scripts/go-release.sh` | none | `2026-03-06T09:45:00Z` |
-| WS-01 | Parallel chat A | `main` | `in_progress` | Ongoing feature/edit stream | `src/main.js` | none | `2026-03-06T09:40:00Z` |
-| WS-02 | Parallel chat B | `main` | `in_progress` | Ongoing styling stream | `styles/builder.css` | none | `2026-03-06T09:40:00Z` |
-| WS-03 | Codex (this chat) | `main` | `in_progress` | UX/editor stream: Kanban page reorder, toolbar/icon actions, inspector compaction (with persistent accordion state), purge reset, cover headline anti-crop + offset, and continuous doc-sync | `src/main.js`, `src/render/components.js`, `src/render/page.js`, `src/templates/catalog.js`, `styles/builder.css`, `index.html`, `README.md` | none | `2026-03-06T16:03:09Z` |
+| WS-00 | Command and control | `main` | `in_progress` | Coordinate release readiness and merge order | `README.md`, `WORKSTREAMS.md`, `scripts/go-release.sh` | none | `2026-04-01T16:35:00Z` |
+| WS-03 | Codex (this chat) | `main` | `in_progress` | Add a Figma-driven Media Coverage portrait family plus LinkedIn builder performance hardening, targeted render/persist instrumentation, dashboard chrome tightening, and thumbnail/dashboard optimization | `index.html`, `styles/linkedin-builder.css`, `src/assets/asset-manager.js`, `src/linkedin/constants.js`, `src/linkedin/export.js`, `src/linkedin/main.js`, `src/linkedin/schema.js`, `src/linkedin/templates.js`, `README.md`, `WORKSTREAMS.md` | none | `2026-04-01T18:02:11Z` |
 
-## Merge Queue (Top = next)
+## Merge Queue
 
 1. _none queued_
 
 ## Decisions Log
 
-- `2026-03-06`: app-builder is a separate git repo from Configurator.
-- `2026-03-06`: production deploy path is git push to `main` + Vercel integration.
-- `2026-03-06`: release gate is `scripts/go-release.sh` with strict preflight checks.
+- `2026-04-01`: `/` now targets a LinkedIn-first builder instead of the report-builder shell.
+- `2026-04-01`: legacy report-builder access is preserved at `/legacy.html`.
+- `2026-04-01`: export target is project-wide and ratio-aware, with `1:1` square as the default and `4:5` portrait as the secondary preset.
+- `2026-04-01`: Figma is reference-linked in v1 through stored URLs, tags, notes, and preview assets rather than live sync.
+- `2026-04-01`: the default LinkedIn surface is dashboard-first and library-led, with a persistent right rail for page and selected-item controls.
+- `2026-04-01`: layout now defaults to unlocked, page thumbnails live in the persistent right rail, and text editing is inline-first with typography controls in the inspector.
+- `2026-04-01`: the right rail now includes a grouped element manager for `Background`, `Foreground`, `Text`, and `CTA`, with add/duplicate/delete/reorder/layer controls.
+- `2026-04-01`: the app now always lands on a front-door dashboard with compact top-right `New post` and `New carousel` actions, `Recent drafts`, `Start from template`, and conditional `Saved posts`, backed by a local document registry and per-document thumbnails.
+- `2026-04-01`: the Immersive brand block in the top bar doubles as a home action that returns the user to the dashboard from the editor.
+- `2026-04-01`: the LinkedIn builder now includes a portrait-only `Media Coverage Portrait` family derived from four shared Figma references, with family variants, locked decorative background art, portrait speaker cutouts, and editable headline/deck/byline/identity slots.
+- `2026-04-01`: Media Coverage variants hydrate Figma-exported template assets into the local asset library, preserve user text and swapped speaker imagery across variant changes, and expose family-specific `Variant`, `Background`, and `Text layout` controls in the left rail.
 
 ## Handoffs
 
@@ -75,8 +64,14 @@ Use this format:
 
 Current entries:
 
-- `2026-03-06T09:00:00Z | WS-00 | command | initialized command-and-control board | WORKSTREAMS.md, README.md | require all chats to adopt protocol`
-- `2026-03-06T12:20:54Z | WS-03 | codex | brand-aligned chart theme defaults (palette/typography/radii) and removed runtime hard-coded chart style drift | src/render/chart-theme.js, src/render/chart-runtime.js, WORKSTREAMS.md | visual QA on chart variants in Pages/Templates defaults`
-- `2026-03-06T15:14:12Z | WS-03 | codex | fixed style-profile resolution bug (variant-aware), normalized scatter/histogram/waterfall/treemap/heatmap/funnel + legacy unified variants to tokenized theme contract, and documented canonical Figma nodes in theme runtime | src/render/chart-runtime.js, src/render/chart-theme.js, src/data/chart-registry.js, WORKSTREAMS.md | run manual visual QA against Figma refs for bar/line/donut/combo/radar and verify remaining advanced variants`
-- `2026-03-06T15:52:42Z | WS-03 | codex | implemented UX/editor pass (page reorder interactions, iconized toolbar actions, inspector compaction, purge-to-defaults, cover headline anti-crop + movable offset) and refreshed project documentation | src/main.js, src/render/components.js, src/render/page.js, src/templates/catalog.js, styles/builder.css, index.html, README.md, WORKSTREAMS.md | continue enforcing doc-sync updates in parallel with feature edits`
-- `2026-03-06T16:03:09Z | WS-03 | codex | fixed inspector accordion collapse bug by persisting section open/closed state across live re-renders; updated docs/workstream tracking | src/main.js, README.md, WORKSTREAMS.md | validate in UI that changing controls no longer auto-collapses sections`
+- `2026-04-01T09:43:46Z | WS-03 | codex | implemented LinkedIn-first builder shell, schema, templates, persistence, exports, archived legacy entrypoint, and doc/routing updates | index.html, legacy.html, vercel.json, styles/linkedin-builder.css, src/core/persisted-history-store.js, src/linkedin/*, README.md, WORKSTREAMS.md | smoke-test boot, JSON round-trip, image import, PNG export, PDF export, and legacy entrypoint`
+- `2026-04-01T10:17:58Z | WS-03 | codex | simplified the default LinkedIn flow around a dashboard of templates, backgrounds, uploaded images, and saved posts, while keeping the advanced editor behind an explicit toggle | index.html, styles/linkedin-builder.css, src/linkedin/constants.js, src/linkedin/schema.js, src/linkedin/main.js, README.md, WORKSTREAMS.md | smoke-test boot, dashboard interactions, saved-post library load/save, image upload/apply, PNG export, PDF export, and legacy entrypoint`
+- `2026-04-01T11:16:00Z | WS-03 | codex | cleaned up the LinkedIn editor around inline-first text editing, default unlocked layout, a single File menu, keyboard undo/redo, right-rail page thumbnails, and tighter text bounding boxes | index.html, styles/linkedin-builder.css, src/linkedin/constants.js, src/linkedin/schema.js, src/linkedin/templates.js, src/linkedin/main.js, README.md, WORKSTREAMS.md | smoke-test inline edit, Cmd/Ctrl+Z, File menu actions, right-rail page management, and text auto-fit on style/content changes`
+- `2026-04-01T13:05:00Z | WS-03 | codex | stabilized the LinkedIn editor around square-first aspect ratios, ratio-aware exports, a grouped element manager, consistent selection/deselect behavior, per-element image media, and Configurator-aligned chrome tokens | index.html, styles/linkedin-builder.css, src/linkedin/constants.js, src/linkedin/schema.js, src/linkedin/templates.js, src/linkedin/export.js, src/linkedin/main.js, README.md, WORKSTREAMS.md | smoke-test ratio switching, add/delete/duplicate/reorder elements, inline text editing, Delete/Escape/undo shortcuts, PNG export, and PDF export`
+- `2026-04-01T15:10:00Z | WS-03 | codex | moved the LinkedIn app to a true front-door dashboard with recent drafts, saved posts, template starts, a local document registry, migration from legacy single-draft storage, and per-document thumbnail persistence while keeping the current editor as the edit surface | index.html, styles/linkedin-builder.css, src/core/persisted-history-store.js, src/linkedin/constants.js, src/linkedin/documents.js, src/linkedin/main.js, src/linkedin/store.js, README.md, WORKSTREAMS.md | smoke-test dashboard boot, legacy-draft migration, template start flow, recent/saved document actions, autosave ordering, and thumbnail refresh on return to dashboard`
+- `2026-04-01T16:35:00Z | WS-03 | codex | implemented the Figma-driven Media Coverage portrait family as four reusable dashboard-start variants with locked decorative background layers, portrait speaker cutouts, variant/background/text-layout controls, portrait-first template boot, template-asset hydration, and live dashboard template previews | styles/linkedin-builder.css, src/assets/asset-manager.js, src/linkedin/constants.js, src/linkedin/schema.js, src/linkedin/templates.js, src/linkedin/main.js, README.md, WORKSTREAMS.md | smoke-test dashboard template cards, media coverage variant switching, background-only switching, text layout switching, speaker image replacement, portrait export, and JSON round-trip`
+- `2026-04-01T14:42:18Z | WS-03 | codex | added opt-in LinkedIn perf instrumentation, skipped document persistence for pure ui actions, moved thumbnail refresh to explicit lifecycle events, removed render-loop template hydration, cached dashboard previews, and instrumented export capture timings | index.html, src/linkedin/export.js, src/linkedin/main.js, WORKSTREAMS.md | smoke-test dashboard boot, selection/search interactions without thumbnail churn, open/save/import thumbnail refresh, template asset hydration, and PNG/PDF export`
+- `2026-04-01T14:49:26Z | WS-03 | codex | finished wiring the LinkedIn perf pass with explicit persist/thumbnail policies, targeted render invalidation, export capture instrumentation, dashboard preview reuse, and cache-bust updates for the front-door module graph | index.html, src/linkedin/export.js, src/linkedin/main.js, WORKSTREAMS.md | browser-verify perf mode samples, dashboard return thumbnail refresh, template asset hydration idempotence, and PNG/PDF export parity`
+- `2026-04-01T15:07:47Z | WS-03 | codex | fixed export chrome leakage so suppress-selection renders no longer capture passive element overlays over media coverage text and speaker cutouts in output assets | src/linkedin/main.js, WORKSTREAMS.md | browser-verify Media Coverage PNG/PDF exports against editor canvas with Dan Potter variant`
+- `2026-04-01T16:04:47Z | WS-03 | codex | compacted the dashboard chrome by replacing oversized create cards with top-right new-document actions, wiring the Immersive brand block back to the dashboard, and trimming dashboard spacing/cards for a denser front door | index.html, styles/linkedin-builder.css, src/linkedin/main.js, README.md, WORKSTREAMS.md | browser-verify dashboard home navigation, top-right new post/new carousel actions, and the compact dashboard layout after refresh`
+- `2026-04-01T18:02:11Z | WS-03 | codex | fixed media-coverage record hydration so legacy speaker media no longer binds onto locked background art, made aspect-ratio changes rebuild that family against template geometry, and restored full-frame image selection with larger resize handles | index.html, styles/linkedin-builder.css, src/linkedin/main.js, src/linkedin/schema.js, src/linkedin/store.js, WORKSTREAMS.md | browser-verify open-draft speaker rendering, square/portrait switching, image selection bounds, and resize handle usability after refresh`

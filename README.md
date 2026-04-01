@@ -1,310 +1,176 @@
-# Immersive Report Builder v0.2
+# Immersive LinkedIn Builder
 
-Local-first, browser-based report builder for composable executive-readiness reports.
+Local-first browser app for building LinkedIn static posts and PDF carousel documents from a compact dashboard of recents, templates, and saved posts.
 
-The app is frontend-only (no backend), optimized for Chromium print/PDF workflows, and supports four fixed output profiles:
+The default experience at `/` is now the LinkedIn-first builder. The older report-builder experience is preserved at `/legacy.html` for reference and recovery.
 
-- `LETTER_landscape` (default)
-- `LETTER_portrait`
-- `A4_landscape`
-- `A4_portrait`
+## Current Product Shape
 
-## Workspace Split (March 6, 2026)
+### Default app
 
-This project is intentionally split into two top-level workspaces:
+- URL: `/` or `/index.html`
+- Purpose: land on a LinkedIn-only dashboard first, use compact top-right creation actions, then enter the editor only when creating or opening a document
+- Default output format: square `1080 × 1080` (`1:1`)
+- Alternate output format: LinkedIn portrait `1080 × 1350` (`4:5`)
+- Output modes:
+  - `Static Post`
+  - `Carousel`
+- Archetypes:
+  - `People Spotlight`
+  - `Case Study`
+  - `Insight POV`
+  - `Event Recap`
+  - `Product Update`
+  - `Social Proof`
 
-- Configurator parent project:
-  - /Users/will.bloor/Documents/Configurator
-  - use this for Configurator features and root app work
-- App Builder project (this folder):
-  - /Users/will.bloor/Documents/app-builder
-  - use this for doc-builder work only
+### Legacy app
 
-Why this exists:
+- URL: `/legacy.html`
+- Purpose: archived report-builder shell and codepath
+- Status: preserved, not the primary product direction
 
-- to stop branch/worktree cross-contamination between Configurator and doc-builder work
-- to make Codex/editor threads target one project at a time
+## What Changed On April 1, 2026
 
-Working rule:
+- `index.html` now boots a dedicated LinkedIn dashboard instead of dropping straight into the editor.
+- `legacy.html` preserves the previous report-builder entrypoint.
+- The new builder focuses on:
+  - a dashboard-first surface with:
+    - compact top-right `New post` and `New carousel` actions
+    - `Recent drafts`
+    - `Start from template`
+    - `Saved posts`
+    - a clickable Immersive brand block that returns to the dashboard
+  - a local document registry instead of a single active draft
+  - per-document auto-save, stored metadata, and cover thumbnails
+  - square-first posts with project-wide switching between `1:1` and `4:5`
+  - static posts exported as PNG
+  - multi-page LinkedIn carousel documents exported as PDF
+  - structured content slots:
+    - `eyebrow`
+    - `headline`
+    - `supporting_copy`
+    - `proof_stat`
+    - `cta`
+    - `author_or_source`
+  - a persistent right-hand rail for page thumbnails and selected-item controls
+  - a compact element manager grouped into `Background`, `Foreground`, `Text`, and `CTA`
+  - unlocked-by-default layout editing for dragging and resizing on-canvas
+  - add, duplicate, delete, and reorder element controls without leaving the editor
+  - uploaded graphics that can be reused as a local image library
+  - locally saved post snapshots for remixing and reuse
+  - a reference-linked resource library for Figma links, reference posts, and uploaded inspiration
+  - a Figma-driven `Media Coverage Portrait` design family with reusable launch variants:
+    - `Speaker`
+    - `Speaker Alt`
+    - `Speaker Minimal`
+    - `Author`
+  - locked decorative background art plus editable headline, deck/byline, speaker image, name, and role slots for the media coverage family
 
-- open Configurator tasks in a thread rooted at /Users/will.bloor/Documents/Configurator
-- open doc-builder tasks in a thread rooted at /Users/will.bloor/Documents/app-builder
-- do not switch the Configurator root thread onto doc-builder branches
+## Current Capabilities
 
-Safety backup:
-
-- /Users/will.bloor/Documents/Configurator-doc-builder was kept as a recovery backup while this split was set up
-
-## Multi-Chat Coordination (Required)
-
-When multiple chats are active, coordination is mandatory.
-
-1. Read `WORKSTREAMS.md` before making any code changes.
-2. Claim a workstream row and add file locks before editing.
-3. Update your row status/locks as work changes.
-4. Add a handoff line when done, then clear locks.
-5. Only control owner (`WS-00`) runs release flow (`Go` / `scripts/go-release.sh`).
-6. With each meaningful feature/change, update both `README.md` and `WORKSTREAMS.md` in the same workstream pass.
-
-Source of truth:
-
-- `/Users/will.bloor/Documents/app-builder/WORKSTREAMS.md`
-
-## Current Status (March 5, 2026)
-
-This README reflects the current handoff status for moving this code into a new repository.
-
-## Latest Updates (March 6, 2026)
-
-- Unified chart model work is active under CH (Charts), with ECharts as the runtime engine.
-- Brand chart theme is centralized in `src/render/chart-theme.js` and applied through runtime normalization in `src/render/chart-runtime.js`.
-- Figma-referenced chart style profiles are wired for:
-  - horizontal/stacked bar baseline
-  - line baseline
-  - offset donut baseline
-  - column+line combo baseline
-  - radar baseline
-- Remaining chart families now normalize against the same token-driven style contract (typography/axis/legend/palette behavior), while keeping type-specific geometry.
-- Variant style profile assignment lives in `src/data/chart-registry.js`.
-- New inserted charts now use seed data that clearly differentiates stacked vs clustered behaviors by default.
-- `useBrandDefaults` remains the default path; local per-chart visual overrides are still supported.
-
-### UX + Editor Updates (March 6, 2026, 15:52 UTC)
-
-- Pages drawer now supports Kanban-style drag reorder with live displacement and slot placeholder feedback.
-- Pages row actions were updated to compact icon controls and improved drag affordance.
-- Component toolbar now includes icon `Duplicate`, trash-can delete, and true `INS` toggle behavior.
-- Component keyboard shortcuts added:
-  - `Cmd/Ctrl + C` copies selected component
-  - `Cmd/Ctrl + V` pastes copied component (unlocked, offset) onto active page
-- Topbar swatches now reflect rendered selected component colors/surface state more reliably.
-- Inspector was compacted into grouped/collapsible sections (`Basic`, `Component Controls`, `Layout & Sizing`, `Advanced Props`).
-- Inspector accordion state is now preserved while editing controls, so sections no longer collapse on each input change.
-- New topbar `Purge` action resets project to factory defaults (default templates only) and clears persisted local state keys.
-- Cover/headline cropping was reduced with updated hero typography constraints and responsive sizing.
-- Cover hero now supports inspector-controlled vertical headline offset (`contentOffsetY`) for manual headline repositioning.
-- Default all-caps page headline slot contract was relaxed (not force-locked), so headline blocks can be moved.
-
-### Implemented
-
-- Grid system is **2x denser** than the original baseline:
-  - `--grid-cols: 24`
-  - `--grid-gap: 6px`
-  - `--grid-row: 10px`
-  - portrait overrides use smaller row/gap values
-- Drag/resize/delete/fit interactions are stable:
-  - drag via Moveable runtime
-  - resize via custom 8-point bounding box handles
-  - auto-fit clamps to remaining rows on page
-  - delete supports toolbar confirm and keyboard delete
-- Top bar was replaced with a contextual Figma-style control surface:
-  - global actions (`undo`, `redo`, `grid`, `print`)
-  - text context controls (`Title/Body`, family/size/weight, B/I/U, align, line-height, letter-spacing, case, text color)
-  - surface controls for text components (`No line/Thin/Thick`, keyline color, background color, document color swatches)
-- Text styling model is normalized and persisted for text design components:
-  - `props.typography.{title,body}`
-  - `props.surface`
-  - normalization applied in factories and migration path to keep legacy projects loading
-- Text rendering for `text`, `all_caps_title`, `header_3`, and `copy_block` now reads normalized typography/surface style values.
-- Palette organization is split into:
-  - `Page Layout Templates`
-  - `On-Page Components` (grouped by category)
-- Editor open behavior now defaults to text editing workflows:
-  - clicking any component with `title` and/or `body` opens the component editor
-  - adding a component auto-opens the component editor
-
-### In Progress / Not Yet Complete
-
-- True in-canvas inline text editing (contenteditable in situ) is still pending; text editing is currently inspector-driven.
-- Contextual topbar styling is fully wired only for text design components (`text`, `all_caps_title`, `header_3`, `copy_block`), not every text-bearing component yet.
-- Transparent fill (`no background`) and micro-label grouping in the top bar are planned next steps.
+- Dashboard-first creation flow:
+  1. land on the dashboard
+  2. use `New post`, `New carousel`, open a recent draft, open a saved post, or start from a template
+  3. enter the editor only after a document choice is made
+  4. use the editor for output mode, aspect ratio, backgrounds, templates, text styles, CTAs, images, and detailed element editing
+- Document model:
+  - `Recent drafts` are auto-saved local documents sorted by `updatedAt`
+  - `Saved posts` are explicit library entries backed by the same document registry
+  - `Save to library` marks the active document as saved rather than creating a disconnected copy
+  - the app stores one state payload per document plus a local index of metadata
+- Frame management:
+  - add, duplicate, delete, and reorder carousel pages
+  - enforce a single frame in static mode
+- Editing:
+  - inline text editing on-canvas
+  - right-rail typography controls for selected text and button items
+  - drag and corner-resize with layout unlocked by default
+  - click-to-deselect page mode and `Escape` to return to page controls
+  - `Delete` / `Backspace` removes the selected element
+  - undo / redo via buttons or `Cmd/Ctrl+Z`
+  - grouped import / export / reset actions under a single `File` menu
+  - add `Text`, `Image`, `Shape`, and `Button` elements from the right rail
+- Local libraries:
+  - recent draft thumbnails
+  - saved post library for remixing prior work
+  - background presets
+  - uploaded image library
+- Media Coverage family:
+  - dashboard template cards for the four portrait media coverage variants
+  - portrait-first boot at `1080 × 1350`
+  - variant switching that preserves compatible user content and swapped speaker imagery
+  - family-specific controls for `Variant`, `Background`, and `Text layout`
+  - Figma-exported decorative asset layers that are locked in the editor but persisted locally after hydration
+- Resource library:
+  - save `figma_link`, `reference_post`, or `upload` references
+  - assign tags, notes, preview images, and archetypes
+  - attach resources to frames for working context in advanced mode
+- Portability:
+  - local persistence
+  - import / export JSON drafts
 
 ## Quick Start
 
-1. Start a local web server from the project folder.
-2. Open `http://localhost:4173/` (or `http://localhost:4173/index.html`).
-3. Do **not** open with `file://` (ES module imports will fail).
+1. Start a local web server from this folder.
+2. Open `http://localhost:4173/`.
+3. Do not open with `file://`.
 
 Example:
 
 ```bash
-cd <repo-root>
-python3 -m http.server 4173
-# open http://localhost:4173/
-```
-
-## Deploy (Vercel)
-
-This project is static (no build step required). Deploy directly from this folder.
-
-1. Import this repository into Vercel.
-2. Keep the project root as this folder (`app-builder`).
-3. Build Command: leave empty.
-4. Output Directory: leave empty (serve root as static files).
-5. Deploy.
-
-If this project was moved to a new folder but you already had an existing Vercel project:
-
-```bash
 cd /Users/will.bloor/Documents/app-builder
-npx --yes vercel link
-# choose "Link to existing project"
-npx --yes vercel deploy --prod
+python3 -m http.server 4173
 ```
 
-The included `vercel.json` rewrites both `/` and `/Index.html` to `/index.html` so casing differences do not break deploys on case-sensitive hosts.
+Legacy builder:
 
-### Stable `Go` Release Runbook
-
-This repository supports a deterministic production release flow for app-builder only.
-Before release, ensure `WORKSTREAMS.md` shows no conflicting active locks and `Ready for release: YES`.
-
-- Chat trigger contract: send exactly `Go` in a Codex thread rooted at `/Users/will.bloor/Documents/app-builder`.
-- Runner command:
-
-```bash
-bash /Users/will.bloor/Documents/app-builder/scripts/go-release.sh
+```text
+http://localhost:4173/legacy.html
 ```
 
-- Optional flags:
-  - `--dry-run`
-  - `--url <prod-url>`
-  - `--timeout <seconds>` (default `300`)
+## Export Rules
 
-`go-release.sh` behavior:
-
-1. Safety guards:
-   - repo root must be `/Users/will.bloor/Documents/app-builder`
-   - `origin` must be `https://github.com/willbloor/immersive-report-builder.git`
-2. Preflight checks:
-   - current branch is `main`
-   - working tree is clean
-   - local `main` is not behind `origin/main`
-   - `vercel.json` is valid JSON
-   - `index.html` exists
-3. Deploy action:
-   - `git push origin main`
-4. Post-deploy validation:
-   - poll `https://immersive-report-builder.vercel.app/`
-   - poll `https://immersive-report-builder.vercel.app/Index.html`
-   - require `HTTP 200` for both (every 10s, up to timeout)
-5. Failure policy:
-   - stop immediately
-   - print exact failure plus rollback guide:
-     - redeploy previous Vercel deployment, or
-     - `git revert <sha>` and `git push origin main`
-
-## Architecture Overview
-
-### Runtime Libraries
-
-- [Moveable](https://github.com/daybrush/moveable): component dragging and target tracking
-- [ECharts](https://echarts.apache.org/): chart rendering runtime
-
-### Core Modules
-
-- `src/main.js`: app orchestration, store wiring, interactions, import/export, print controls
-- `src/render/page.js`: page/component DOM assembly, resize handle interactions, overflow checks
-- `src/render/components.js`: component HTML rendering and toolbar controls
-- `src/templates/catalog.js`: template/component factories, layout constraints, layout clamping
-- `src/state/*`: schema defaults, migration, persistence store
-- `src/print/*`: profile definitions and print CSS injection
-
-## Current Interaction Model
-
-### Selection
-
-- Clicking a component selects it.
-- Selected components show a floating toolbar and visible bounding box handles.
-
-### Drag
-
-- Dragging component body moves the component with grid snapping.
-- Drag commits to layout values on interaction end.
-
-### Resize
-
-- Resize is done via custom bounding handles (`n/ne/e/se/s/sw/w/nw`).
-- Resize snaps to the same grid metrics as drag.
-- Locked components are protected from destructive actions.
-
-### Auto-fit (`Fit`)
-
-- Uses natural content measurement.
-- Converts measured height to row span.
-- Clamps by component constraints and remaining rows on page.
-
-### Delete
-
-- Toolbar delete is two-step via trash icon (click once to arm, click again to confirm).
-- Keyboard `Delete`/`Backspace` deletes selected component directly.
-- Keyboard delete is ignored while typing in form fields/contenteditable.
-
-## Data, Import/Export, Persistence
-
-- Project JSON export/import includes:
-  - `project`, `footer`, `theme`, `datasets`, `assets`, `pages`
-- CSV/JSON dataset import is supported.
-- Image assets are stored as data URLs.
-- Local persistence key:
-  - `doc-builder.state.v0_2`
-- Legacy key cleared by purge flow:
-  - `il_report_builder_state_v0_1`
-- Schema version:
-  - `0.2`
-- Runtime metadata may include:
-  - `project.gridDensity` (used to keep old projects aligned to the denser grid)
+- Static mode:
+  - export filename ends in `.png`
+  - captures the active frame at the current project ratio
+- Carousel mode:
+  - export filename ends in `.pdf`
+  - exports all frames in current order
+  - every page uses the current project ratio and the same dimensions
+- JSON:
+  - exports the full local draft state for round-tripping
 
 ## Repository Layout
 
-```text
-<repo-root>
-├── index.html
-├── README.md
-├── src
-│   ├── main.js
-│   ├── assets
-│   ├── data
-│   ├── import
-│   ├── print
-│   ├── render
-│   ├── state
-│   ├── templates
-│   └── utils
-└── styles
-    ├── builder.css
-    ├── print.css
-    └── tokens.css
-```
+- `index.html`
+  - LinkedIn builder shell
+- `legacy.html`
+  - archived report-builder shell
+- `src/linkedin/*`
+  - LinkedIn schema, templates, state, export flow, and app runtime
+- `src/core/persisted-history-store.js`
+  - reusable local persistence + undo/redo store
+- `src/main.js`
+  - legacy report-builder runtime
 
-## Smoke Test Checklist
+## Deploy (Vercel)
 
-1. Load app over HTTP (`python3 -m http.server 4173`).
-2. Select a component and verify toolbar appears.
-3. Select a text component (`text`, `all_caps_title`, `header_3`, `copy_block`) and verify contextual topbar controls appear.
-4. Change typography and surface controls from topbar; verify live preview and persisted values after reload.
-5. Drag component and confirm grid-snap movement.
-6. Resize via bounding handles and confirm layout updates.
-7. Click `Fit` repeatedly and verify component does not force page growth.
-8. Click `Del` then `Confirm` and verify deletion.
-9. Select a component and press `Delete` key to verify keyboard deletion.
-10. Export JSON, reset sample pack, import JSON, verify round-trip.
-11. Print all 4 profiles and verify fixed page size + footer pagination.
+This is still a static site with no build step.
 
-## Known Limitations / Notes
+1. Import the repository into Vercel.
+2. Keep the project root as this folder.
+3. Leave Build Command empty.
+4. Leave Output Directory empty.
 
-1. Large embedded image assets can exhaust localStorage quickly.
-2. Runtime is local-only; there is no server-side PDF stabilization.
-3. Some legacy compatibility logic remains in `src/main.js` for older seeded layout variants.
-4. In-canvas inline text editing is not implemented yet (editing still flows through component editor forms).
-5. Transparent fill mode (`no background`) is not implemented yet in the surface model/UI.
+`vercel.json` rewrites:
 
-## Version Snapshot
+- `/` -> `/index.html`
+- `/legacy` -> `/legacy.html`
+- casing-safe variants for both
 
-- UI title: `Immersive Report Builder v0.2`
-- App version constant: `0.2` (`src/utils/helpers.js`)
-- Current cache-busting suffixes in `index.html`:
-  - `styles/tokens.css?v=20260305a`
-  - `styles/builder.css?v=20260305p`
-  - `styles/print.css?v=20260305h`
-  - `src/main.js?v=20260305u`
+## Coordination Rule
+
+When a change affects default boot behavior, reset flows, or the main product direction, update both:
+
+- `/Users/will.bloor/Documents/app-builder/README.md`
+- `/Users/will.bloor/Documents/app-builder/WORKSTREAMS.md`

@@ -5,8 +5,16 @@
       "destination": "/index.html"
     },
     {
+      "source": "/legacy",
+      "destination": "/legacy.html"
+    },
+    {
       "source": "/Index.html",
       "destination": "/index.html"
+    },
+    {
+      "source": "/Legacy.html",
+      "destination": "/legacy.html"
     }
   ]
 }
